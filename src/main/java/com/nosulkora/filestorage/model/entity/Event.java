@@ -1,14 +1,34 @@
-package org.nosulkora.filestorage.model.entity;
+package com.nosulkora.filestorage.model.entity;
 
-import org.nosulkora.filestorage.model.enums.EventStatus;
+import com.nosulkora.filestorage.model.enums.EventStatus;
+import jakarta.persistence.*;
+
 import java.time.LocalDateTime;
 
+@Entity
+@Table(name = "events")
 public class Event {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Integer id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user", nullable = false)
     private User user;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "file", nullable = false)
     private File file;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
     private EventStatus status;
+
+    @Column(nullable = false)
     private LocalDateTime timeStamp;
+
+    public Event() {
+    }
 
     public Event(Integer id, User user, File file, EventStatus status, LocalDateTime timeStamp) {
         this.id = id;

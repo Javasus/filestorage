@@ -1,30 +1,17 @@
-package com.nosulkora.filestorage.model.entity;
+package com.nosulkora.filestorage.model.dto;
 
 import com.nosulkora.filestorage.model.enums.FileStatus;
-import jakarta.persistence.*;
 
-@Entity
-@Table(name = "files")
-public class File {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+public class FileDto {
     private Integer id;
-
-    @Column(nullable = false)
     private String name;
-
-    @Column(nullable = false)
-    private String location; // MinIO S3 URL
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    private String location;
     private FileStatus status;
 
-    public File() {
+    public FileDto() {
     }
 
-    public File(Integer id, String name, String location, FileStatus status) {
+    public FileDto(Integer id, String name, String location, FileStatus status) {
         this.id = id;
         this.name = name;
         this.location = location;
