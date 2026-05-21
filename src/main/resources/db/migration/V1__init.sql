@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS users
     username      VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     salt          VARCHAR(255) NOT NULL,
-    status        VARCHAR(50)  NOT NULL
+    status        VARCHAR(50)  NOT NULL,
+    role          VARCHAR(50)  NOT NULL DEFAULT 'USER'
 );
 
 CREATE TABLE IF NOT EXISTS files

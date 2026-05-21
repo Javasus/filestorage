@@ -12,6 +12,7 @@ public class UserMapper {
         dto.setId(user.getId());
         dto.setUsername(user.getUsername());
         dto.setStatus(user.getStatus());
+        dto.setRole(user.getRole());
         return dto;
     }
 
@@ -23,6 +24,7 @@ public class UserMapper {
         user.setId(dto.getId());
         user.setUsername(dto.getUsername());
         user.setStatus(dto.getStatus());
+        user.setRole(dto.getRole());
         return user;
     }
 }

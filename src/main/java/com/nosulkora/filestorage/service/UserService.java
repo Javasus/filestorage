@@ -10,4 +10,5 @@ public interface UserService {
     Mono<Void> delete(Integer id);
     Mono<UserDto> findById(Integer id);
     Flux<UserDto> findAll();
+    Mono<UserDto> findByUsername(String username);
 }

@@ -1,5 +1,6 @@
 package com.nosulkora.filestorage.model.entity;
 
+import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
 import jakarta.persistence.*;
 
@@ -24,18 +25,30 @@ public class User {
     @Column(nullable = false)
     private UserStatus status;
 
+    @Column(nullable = false)
+    private UserRole role; // ADMIN, MODERATOR, USER
+
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<Event> events;
 
     public User() {
     }
 
-    public User(Integer id, String username, String passwordHash, String salt, UserStatus status, List<Event> events) {
+    public User(
+            Integer id,
+            String username,
+            String passwordHash,
+            String salt,
+            UserStatus status,
+            UserRole role,
+            List<Event> events
+    ) {
         this.id = id;
         this.username = username;
         this.passwordHash = passwordHash;
         this.salt = salt;
         this.status = status;
+        this.role = role;
         this.events = events;
     }
 
@@ -78,6 +91,10 @@ public class User {
     public void setStatus(UserStatus status) {
         this.status = status;
     }
+
+    public UserRole getRole() { return role; }
+
+    public void setRole(UserRole role) { this.role = role; }
 
     public List<Event> getEvents() {
         return events;
