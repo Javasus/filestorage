@@ -4,6 +4,7 @@ import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
 import jakarta.persistence.*;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Entity
@@ -31,6 +32,9 @@ public class User {
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<Event> events;
 
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private List<File> files;
+
     public User() {
     }
 
@@ -41,7 +45,8 @@ public class User {
             String salt,
             UserStatus status,
             UserRole role,
-            List<Event> events
+            List<Event> events,
+            List<File> files
     ) {
         this.id = id;
         this.username = username;
@@ -50,6 +55,7 @@ public class User {
         this.status = status;
         this.role = role;
         this.events = events;
+        this.files = files;
     }
 
     public Integer getId() {
@@ -102,5 +108,13 @@ public class User {
 
     public void setEvents(List<Event> events) {
         this.events = events;
+    }
+
+    public List<File> getFiles() {
+        return files;
+    }
+
+    public void setFiles(List<File> files) {
+        this.files = files;
     }
 }

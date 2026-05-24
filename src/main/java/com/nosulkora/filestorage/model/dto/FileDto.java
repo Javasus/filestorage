@@ -7,15 +7,17 @@ public class FileDto {
     private String name;
     private String location;
     private FileStatus status;
+    private Integer userId;
 
     public FileDto() {
     }
 
-    public FileDto(Integer id, String name, String location, FileStatus status) {
+    public FileDto(Integer id, String name, String location, FileStatus status, Integer userId) {
         this.id = id;
         this.name = name;
         this.location = location;
         this.status = status;
+        this.userId = userId;
     }
 
     public Integer getId() {
@@ -48,5 +50,13 @@ public class FileDto {
 
     public void setStatus(FileStatus status) {
         this.status = status;
+    }
+
+    public Integer getUserId() {
+        return userId;
+    }
+
+    public void setUserId(Integer userId) {
+        this.userId = userId;
     }
 }

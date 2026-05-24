@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS files
     id       INT PRIMARY KEY AUTO_INCREMENT,
     name     VARCHAR(255) NOT NULL,
     location VARCHAR(500) NOT NULL,
-    status   VARCHAR(50)  NOT NULL
+    status   VARCHAR(50)  NOT NULL,
+    user_id  INT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS events

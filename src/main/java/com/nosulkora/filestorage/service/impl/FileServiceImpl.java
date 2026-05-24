@@ -1,5 +1,6 @@
 package com.nosulkora.filestorage.service.impl;
 
+import com.nosulkora.filestorage.exception.AccessDeniedException;
 import com.nosulkora.filestorage.exception.NotFoundException;
 import com.nosulkora.filestorage.exception.ValidationException;
 import com.nosulkora.filestorage.mapper.FileMapper;
@@ -7,6 +8,7 @@ import com.nosulkora.filestorage.model.dto.EventDto;
 import com.nosulkora.filestorage.model.dto.FileDto;
 import com.nosulkora.filestorage.model.dto.UserDto;
 import com.nosulkora.filestorage.model.entity.File;
+import com.nosulkora.filestorage.model.entity.User;
 import com.nosulkora.filestorage.model.enums.EventStatus;
 import com.nosulkora.filestorage.model.enums.FileStatus;
 import com.nosulkora.filestorage.model.enums.UserRole;
@@ -43,51 +45,62 @@ public class FileServiceImpl implements FileService {
 
     @Override
     public Mono<FileDto> create(FileDto fileDto) {
-        return getCurrentUserWithAccessCheck()
+        return getCurrentUser()
                 .flatMap(userDto -> {
-                    validateFileId(fileDto.getId());
                     validateFilename(fileDto.getName());
+                    // userProxy для корректного сохранения file.
+                    User userProxy = new User();
+                    userProxy.setId(userDto.getId());
                     File file = FileMapper.toEntity(fileDto);
+                    file.setUser(userProxy);
                     file.setStatus(FileStatus.ACTIVE);
-                    return saveFileAndCreateEvent(file, userDto.getId(), EventStatus.CREATED);
+                    return saveFile(file)
+                            .flatMap(savedFile -> createEvent(userDto.getId(), savedFile.getId(), EventStatus.CREATED)
+                                    .thenReturn(FileMapper.toDto(savedFile)));
                 });
     }
 
     @Override
     public Mono<FileDto> update(FileDto fileDto) {
-        return getCurrentUserWithAccessCheck()
+        return getCurrentUser()
                 .flatMap(userDto -> {
                     validateFileId(fileDto.getId());
                     validateFilename(fileDto.getName());
                     // Проверяем существует ли файл в БД
                     return getFileIsExist(fileDto.getId())
+                            .flatMap(existingFile -> checkFileAccess(existingFile, userDto))
                             .flatMap(existingFile -> {
                                 existingFile.setName(fileDto.getName());
                                 existingFile.setLocation(fileDto.getLocation());
                                 existingFile.setStatus(
                                         fileDto.getStatus() != null ? fileDto.getStatus() : existingFile.getStatus());
-
-                                return saveFileAndCreateEvent(existingFile, userDto.getId(), EventStatus.UPDATED);
+                                return saveFile(existingFile)
+                                        .flatMap(updatedFile ->
+                                                createEvent(userDto.getId(), updatedFile.getId(), EventStatus.UPDATED)
+                                                        .thenReturn(FileMapper.toDto(updatedFile)));
                             });
                 });
     }
 
     @Override
     public Mono<Void> delete(Integer fileId) {
-        return getCurrentUserWithAccessCheck()
+        return getCurrentUser()
                 .flatMap(userDto -> {
                     validateFileId(fileId);
                     return getFileIsExist(fileId)
-                            .flatMap(file -> deleteFileAnrCreateEvent(fileId, userDto.getId(), file.getName()));
+                            .flatMap(file -> checkFileAccess(file, userDto))
+                            .flatMap(file -> deleteFileFromDb(fileId)
+                                    .then(createEvent(userDto.getId(), fileId, EventStatus.DELETED)));
                 });
     }
 
     @Override
     public Mono<FileDto> findById(Integer fileId) {
-        return getCurrentUserWithAccessCheck()
+        return getCurrentUser()
                 .flatMap(userDto -> {
                     validateFileId(fileId);
                     return getFileIfExist(fileId)
+                            .flatMap(file -> checkFileAccess(file, userDto))
                             .map(FileMapper::toDto)
                             .doOnNext(fileDto -> LOGGER.debug(
                                     "File found: {} by user {}",
@@ -98,9 +111,15 @@ public class FileServiceImpl implements FileService {
 
     @Override
     public Flux<FileDto> findAll() {
-        return getCurrentUserWithAccessCheck()
+        return getCurrentUser()
                 .flatMapMany(userDto -> {
                     LOGGER.debug("User {} requested all files", userDto.getUsername());
+                    // USER видит только все свои файлы.
+                    if (userDto.getRole().equals(UserRole.USER)) {
+                        return ReactiveWrapper.flux(() -> fileRepository.findByUserId(userDto.getId()))
+                                .map(FileMapper::toDto);
+                    }
+                    // ADMIN & MODERATOR видят файлы всех пользователей.
                     return ReactiveWrapper.flux(fileRepository::findAll)
                             .map(FileMapper::toDto);
                 });
@@ -108,26 +127,41 @@ public class FileServiceImpl implements FileService {
 
     // --- Вспомогательный методы ---
 
-    private Mono<UserDto> getCurrentUserWithAccessCheck() {
+    /**
+     * Возвращает текущего пользователя, который делает запрос.
+     */
+    private Mono<UserDto> getCurrentUser() {
         return SecurityUtils.getCurrentUserName()
                 .flatMap(userService::findByUsername)
-                .switchIfEmpty(Mono.error(new NotFoundException("User not found")))
-                .flatMap(userDto -> {
-                    if (userDto.getRole().equals(UserRole.USER)) {
-                        return Mono.just(userDto);
-                    }
-                    return Mono.just(userDto);
-                });
+                .switchIfEmpty(Mono.error(new NotFoundException("User not found")));
+    }
+
+    /**
+     * Проверка прав пользователя.
+     *
+     * @param file    Файл над которым совершается действие.
+     * @param userDto Пользователь, который совершает изменения.
+     * @return Файл над которым совершается действие.
+     */
+    private Mono<File> checkFileAccess(File file, UserDto userDto) {
+        // Если роль USER, проверяем совпадение userId
+        if (userDto.getRole().equals(UserRole.USER) && !userDto.getId().equals(file.getUser().getId())) {
+            return Mono.error(new AccessDeniedException("You do not have permission to work with this file."));
+        }
+        // ADMIN и MODERATOR проходят проверку автоматически
+        return Mono.just(file);
     }
 
     private void validateFileId(Integer id) {
         if (id == null) {
+            LOGGER.error("File ID cannot be null");
             throw new ValidationException("File ID cannot be null");
         }
     }
 
     private void validateFilename(String name) {
         if (name == null || name.trim().isEmpty()) {
+            LOGGER.error("File name cannot be empty");
             throw new ValidationException("File name cannot be empty");
         }
     }
@@ -135,23 +169,15 @@ public class FileServiceImpl implements FileService {
     /**
      * Сохраняет файл, и создает и сохраняет событие.
      *
-     * @param file        файл который нужно сохранить в БД.
-     * @param userId      ID пользователя для сохранения Event.
-     * @param eventStatus Статус event.
+     * @param file файл который нужно сохранить в БД.
      * @return сохраненный файл.
      */
-    private Mono<FileDto> saveFileAndCreateEvent(File file, Integer userId, EventStatus eventStatus) {
+    private Mono<File> saveFile(File file) {
         return ReactiveWrapper.mono(() -> {
             File savedFile = fileRepository.save(file);
-            LOGGER.info(
-                    "File {} with id: {}",
-                    eventStatus == EventStatus.CREATED ? "created" : "updated",
-                    savedFile.getId()
-            );
+            LOGGER.info("File saved successfully with ID: {}", savedFile.getId());
             return savedFile;
-        }).flatMap(savedFile -> createEvent(userId, savedFile.getId(), eventStatus)
-                .thenReturn(FileMapper.toDto(savedFile)));
-
+        });
     }
 
     private Mono<Void> createEvent(Integer userId, Integer fileId, EventStatus eventStatus) {
@@ -159,24 +185,26 @@ public class FileServiceImpl implements FileService {
         eventDto.setUserId(userId);
         eventDto.setFileId(fileId);
         eventDto.setStatus(eventStatus);
-        return eventService.create(eventDto).then();
+        return eventService.create(eventDto)
+                .doOnSuccess(v -> LOGGER.info("Event {} create for file ID: {}", eventStatus, fileId))
+                .then();
     }
 
     private Mono<File> getFileIsExist(Integer fileId) {
-        return ReactiveWrapper.monoOptional(() -> fileRepository.findById(fileId)).switchIfEmpty(
-                Mono.error(new NotFoundException("File not found in DB with id: " + fileId)));
+        return ReactiveWrapper.monoOptional(() -> fileRepository.findById(fileId))
+                .switchIfEmpty(Mono.error(new NotFoundException("File not found in DB with id: " + fileId)));
     }
 
-    private Mono<Void> deleteFileAnrCreateEvent(Integer fileId, Integer userId, String filename) {
+    private Mono<Void> deleteFileFromDb(Integer fileId) {
         return ReactiveWrapper.voidOperation(() -> {
             fileRepository.deleteById(fileId);
-            LOGGER.info("File deleted: {} with ID: {}", filename, fileId);
-        }).then(createEvent(userId, fileId, EventStatus.DELETED));
+            LOGGER.info("File record deleted from DB with ID: {}", fileId);
+        });
     }
 
     private Mono<File> getFileIfExist(Integer fileId) {
         return ReactiveWrapper.monoOptional(() ->
                         fileRepository.findById(fileId))
-                .switchIfEmpty(Mono.error(new NotFoundException("File not found with id: " + fileId)));
+                .switchIfEmpty(Mono.error(new NotFoundException("File not found in DB with id: " + fileId)));
     }
 }
