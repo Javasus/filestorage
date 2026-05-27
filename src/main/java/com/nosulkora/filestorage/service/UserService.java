@@ -1,5 +1,7 @@
 package com.nosulkora.filestorage.service;
 
+import com.nosulkora.filestorage.model.dto.AuthRequestDto;
+import com.nosulkora.filestorage.model.dto.AuthResponseDto;
 import com.nosulkora.filestorage.model.dto.UserDto;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -11,4 +13,5 @@ public interface UserService {
     Mono<UserDto> findById(Integer id);
     Flux<UserDto> findAll();
     Mono<UserDto> findByUsername(String username);
+    Mono<AuthResponseDto> login(AuthRequestDto authRequestDto);
 }

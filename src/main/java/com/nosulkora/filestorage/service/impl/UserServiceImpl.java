@@ -4,16 +4,20 @@ import com.nosulkora.filestorage.exception.AccessDeniedException;
 import com.nosulkora.filestorage.exception.NotFoundException;
 import com.nosulkora.filestorage.exception.ValidationException;
 import com.nosulkora.filestorage.mapper.UserMapper;
+import com.nosulkora.filestorage.model.dto.AuthRequestDto;
+import com.nosulkora.filestorage.model.dto.AuthResponseDto;
 import com.nosulkora.filestorage.model.dto.UserDto;
 import com.nosulkora.filestorage.model.entity.User;
 import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
 import com.nosulkora.filestorage.repository.UserRepository;
+import com.nosulkora.filestorage.security.JwtTokenProvider;
 import com.nosulkora.filestorage.security.SecurityUtils;
 import com.nosulkora.filestorage.service.UserService;
 import com.nosulkora.filestorage.utils.ReactiveWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -24,9 +28,17 @@ public class UserServiceImpl implements UserService {
     private static final Logger LOGGER = LoggerFactory.getLogger(UserServiceImpl.class);
 
     private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtTokenProvider jwtTokenProvider;
 
-    public UserServiceImpl(UserRepository userRepository) {
+    public UserServiceImpl(
+            UserRepository userRepository,
+            PasswordEncoder passwordEncoder,
+            JwtTokenProvider jwtTokenProvider
+    ) {
         this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.jwtTokenProvider = jwtTokenProvider;
     }
 
     @Override
@@ -37,6 +49,8 @@ public class UserServiceImpl implements UserService {
                     User user = UserMapper.toEntity(userDto);
                     user.setStatus(UserStatus.ACTIVE);
                     user.setRole(userDto.getRole() == null ? UserRole.USER : userDto.getRole());
+                    // Хэшируем пароль перед сохранением.
+                    user.setPasswordHash(passwordEncoder.encode(userDto.getPassword()));
                     return saveUserEntity(user);
                 }))
                 .map(UserMapper::toDto)
@@ -107,6 +121,26 @@ public class UserServiceImpl implements UserService {
                         .switchIfEmpty(Mono.error(new NotFoundException("User not found with username: " + username)))
                         .flatMap(targetUser -> checkReadAccess(currentUser, targetUser)))
                 .map(UserMapper::toDto);
+    }
+
+    @Override
+    public Mono<AuthResponseDto> login(AuthRequestDto authRequestDto) {
+        return ReactiveWrapper.monoOptional(() -> userRepository.findByUsername(authRequestDto.getUsername()))
+                .switchIfEmpty(Mono.error(new AccessDeniedException("Invalid username or password")))
+                .flatMap(user -> {
+                    // Проверяем статус пользователя
+                    if (user.getStatus() == UserStatus.BLOCKED) {
+                        return Mono.error(new AccessDeniedException("User account is blocked"));
+                    }
+                    // Сверяем пришедший пароль с хэшем из БД
+                    if (!passwordEncoder.matches(authRequestDto.getPassword(), user.getPasswordHash())) {
+                        LOGGER.warn("Failed login attempt for user: {}", authRequestDto.getUsername());
+                        return Mono.error(new AccessDeniedException("Invalid username or password"));
+                    }
+                    // Генерируем JWT токен
+                    String token = jwtTokenProvider.createToken(user.getUsername(), user.getRole().name());
+                    return Mono.just(new AuthResponseDto(token));
+                });
     }
 
     // --- Вспомогательные методы ---

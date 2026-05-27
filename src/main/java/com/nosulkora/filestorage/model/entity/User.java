@@ -4,11 +4,10 @@ import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
 import jakarta.persistence.*;
 
-import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name= "users")
+@Table(name = "users")
 public class User {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -19,9 +18,6 @@ public class User {
 
     @Column(nullable = false)
     private String passwordHash;
-
-    @Column(nullable = false)
-    private String salt;
 
     @Column(nullable = false)
     private UserStatus status;
@@ -42,7 +38,6 @@ public class User {
             Integer id,
             String username,
             String passwordHash,
-            String salt,
             UserStatus status,
             UserRole role,
             List<Event> events,
@@ -51,7 +46,6 @@ public class User {
         this.id = id;
         this.username = username;
         this.passwordHash = passwordHash;
-        this.salt = salt;
         this.status = status;
         this.role = role;
         this.events = events;
@@ -82,14 +76,6 @@ public class User {
         this.passwordHash = passwordHash;
     }
 
-    public String getSalt() {
-        return salt;
-    }
-
-    public void setSalt(String salt) {
-        this.salt = salt;
-    }
-
     public UserStatus getStatus() {
         return status;
     }
@@ -98,9 +84,13 @@ public class User {
         this.status = status;
     }
 
-    public UserRole getRole() { return role; }
+    public UserRole getRole() {
+        return role;
+    }
 
-    public void setRole(UserRole role) { this.role = role; }
+    public void setRole(UserRole role) {
+        this.role = role;
+    }
 
     public List<Event> getEvents() {
         return events;

@@ -3,7 +3,6 @@ CREATE TABLE IF NOT EXISTS users
     id            INT PRIMARY KEY AUTO_INCREMENT,
     username      VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    salt          VARCHAR(255) NOT NULL,
     status        VARCHAR(50)  NOT NULL,
     role          VARCHAR(50)  NOT NULL DEFAULT 'USER'
 );

@@ -24,6 +24,7 @@ public class UserController {
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "Create new user")
     public Mono<UserDto> create(@RequestBody UserDto userDto) {
+        userDto.setRole(null); // Предотвращает несанкционированное создание ADMIN/MODERATOR
         return userService.create(userDto);
     }
 

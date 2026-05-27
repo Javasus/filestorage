@@ -20,6 +20,7 @@ import com.nosulkora.filestorage.service.UserService;
 import com.nosulkora.filestorage.utils.ReactiveWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -44,7 +45,7 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
-    public Mono<FileDto> create(FileDto fileDto) {
+    public Mono<FileDto> create(FileDto fileDto, FilePart filePart) {
         return getCurrentUser()
                 .flatMap(userDto -> {
                     validateFilename(fileDto.getName());
