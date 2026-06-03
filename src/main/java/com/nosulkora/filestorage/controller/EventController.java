@@ -1,11 +1,13 @@
 package com.nosulkora.filestorage.controller;
 
 import com.nosulkora.filestorage.model.dto.EventDto;
-import com.nosulkora.filestorage.repository.EventRepository;
 import com.nosulkora.filestorage.service.EventService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 

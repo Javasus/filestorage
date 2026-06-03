@@ -12,7 +12,7 @@ public class ReactiveWrapper {
 
     // Для Mono. Один результат
     public static <T> Mono<T> mono(Supplier<T> supplier) {
-        return Mono.fromCallable(supplier::get)
+        return Mono.fromSupplier(supplier)
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -25,14 +25,14 @@ public class ReactiveWrapper {
 
     // Для Flux. Много результатов
     public static <T> Flux<T> flux(Supplier<List<T>> supplier) {
-        return Mono.fromCallable(supplier::get)
+        return Mono.fromSupplier(supplier)
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(Flux::fromIterable);
     }
 
     // Для Optional. Может быть null
     public static <T> Mono<T> monoOptional(Supplier<Optional<T>> supplier) {
-        return Mono.fromCallable(supplier::get)
+        return Mono.fromSupplier(supplier)
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(optional -> optional.map(Mono::just).orElseGet(Mono::empty));
     }

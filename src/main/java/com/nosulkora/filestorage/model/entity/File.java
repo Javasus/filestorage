@@ -21,14 +21,19 @@ public class File {
     @Column(nullable = false)
     private FileStatus status;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
+
     public File() {
     }
 
-    public File(Integer id, String name, String location, FileStatus status) {
+    public File(Integer id, String name, String location, FileStatus status, User user) {
         this.id = id;
         this.name = name;
         this.location = location;
         this.status = status;
+        this.user = user;
     }
 
     public Integer getId() {
@@ -61,5 +66,13 @@ public class File {
 
     public void setStatus(FileStatus status) {
         this.status = status;
+    }
+
+    public User getUser() {
+        return user;
+    }
+
+    public void setUser(User user) {
+        this.user = user;
     }
 }

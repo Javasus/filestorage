@@ -1,5 +1,6 @@
 package com.nosulkora.filestorage.model.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
 
@@ -8,6 +9,9 @@ public class UserDto {
     private String username;
     private UserStatus status;
     private UserRole role;
+    // Защита от отправки пароля в Json.
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String password;
 
     public UserDto() {
     }
@@ -46,4 +50,12 @@ public class UserDto {
     public UserRole getRole() { return role; }
 
     public void setRole(UserRole role) { this.role = role; }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
 }

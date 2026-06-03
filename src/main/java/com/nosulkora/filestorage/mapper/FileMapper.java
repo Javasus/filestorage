@@ -13,6 +13,7 @@ public class FileMapper {
         dto.setName(file.getName());
         dto.setLocation(file.getLocation());
         dto.setStatus(file.getStatus());
+        dto.setUserId(file.getUser() != null ? file.getUser().getId() : null);
         return dto;
     }
 

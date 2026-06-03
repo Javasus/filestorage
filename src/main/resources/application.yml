@@ -24,8 +24,8 @@ minio:
   bucket: filestorage
 
 jwt:
-  secret: yourSecretKeyForJWTTokenGenerationAndValidation2024
-  expiration: 86400000
+  secret: "your-super-secret-key-that-must-be-at-least-32-characters-long"
+  expiration: 3600000 # 1 час в миллисекундах
 
 logging:
   level:
