@@ -16,30 +16,33 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 
 @Component
 public class JwtTokenProvider {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(JwtTokenProvider.class);
     private static final String ROLE_CLAIM = "role";
+    private static final String ID_CLAIM = "id";
 
     private final SecretKey secretKey;
     private final long validityInMilliseconds;
 
     public JwtTokenProvider(
             @Value("${jwt.secret}") String secret,
-            @Value("${jwt.expiration:3600000") long validityInMilliseconds
+            @Value("${jwt.expiration:3600000}") long validityInMilliseconds
     ) {
         this.secretKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.validityInMilliseconds = validityInMilliseconds;
     }
 
-    public String createToken(String username, String role) {
+    public String createToken(Integer id, String username, String role) {
         Date now = new Date();
         Date validity = new Date(now.getTime() + validityInMilliseconds);
 
         return Jwts.builder()
                 .subject(username)
+                .claim(ID_CLAIM, id)
                 .claim(ROLE_CLAIM, role)
                 .issuedAt(now)
                 .expiration(validity)
@@ -47,33 +50,18 @@ public class JwtTokenProvider {
                 .compact();
     }
 
-    public boolean validateToken(String token) {
+    // парсим token один раз.
+    public Optional<Claims> parseAndValidateToken(String token) {
         try {
-            Jwts.parser()
+            Claims claims = Jwts.parser()
                     .verifyWith(secretKey)
                     .build()
-                    .parseSignedClaims(token);
-            return true;
+                    .parseSignedClaims(token)
+                    .getPayload();
+            return Optional.of(claims);
         } catch (JwtException | IllegalArgumentException e) {
             LOGGER.error("JWT token validation failed: {}", e.getMessage());
-            return false;
+            return Optional.empty();
         }
-    }
-
-    public String getUsername(String token) {
-        return getClaims(token).getSubject();
-    }
-
-    public Collection<? extends GrantedAuthority> getAuthorities(String token) {
-        String role = getClaims(token).get(ROLE_CLAIM, String.class);
-        return List.of(new SimpleGrantedAuthority("ROLE_" + role));
-    }
-
-    private Claims getClaims(String token) {
-        return Jwts.parser()
-                .verifyWith(secretKey)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
     }
 }

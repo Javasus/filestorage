@@ -7,10 +7,10 @@ import reactor.core.publisher.Mono;
 
 public class SecurityUtils {
 
-    public static Mono<String> getCurrentUserName() {
+    public static Mono<UserPrincipal> getCurrentUser() {
         return ReactiveSecurityContextHolder.getContext()
                 .map(SecurityContext::getAuthentication)
                 .filter(Authentication::isAuthenticated)
-                .map(Authentication::getName);
+                .map(auth -> (UserPrincipal) auth.getPrincipal());
     }
 }

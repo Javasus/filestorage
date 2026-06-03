@@ -40,7 +40,7 @@ public class SecurityConfig {
                                 .permitAll() // Открытые эндпоинты.
                         .anyExchange().authenticated()) // все остальные требуют jwt.
                 // Добавляем наш JWT фильтр прямо перед стандартным фильтром аутентификации
-                .addFilterAt(new JwtTokenFilter(tokenProvider), SecurityWebFiltersOrder.AUTHENTICATION)
+                .addFilterBefore(new JwtTokenFilter(tokenProvider), SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();
     }
 

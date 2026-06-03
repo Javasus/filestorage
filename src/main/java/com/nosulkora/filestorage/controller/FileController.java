@@ -5,6 +5,7 @@ import com.nosulkora.filestorage.service.FileService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
@@ -21,7 +22,7 @@ public class FileController {
         this.fileService = fileService;
     }
 
-    @PostMapping(consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "Upload a file to S3 storage")
     public Mono<FileDto> create(@RequestPart("file") Mono<FilePart> filePartMono) {
@@ -54,7 +55,7 @@ public class FileController {
 
     @GetMapping
     @Operation(summary = "Get all files")
-    public Flux<FileDto> getAll(){
+    public Flux<FileDto> getAll() {
         return fileService.findAll();
     }
 }

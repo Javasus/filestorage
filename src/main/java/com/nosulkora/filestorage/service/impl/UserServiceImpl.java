@@ -13,6 +13,7 @@ import com.nosulkora.filestorage.model.enums.UserStatus;
 import com.nosulkora.filestorage.repository.UserRepository;
 import com.nosulkora.filestorage.security.JwtTokenProvider;
 import com.nosulkora.filestorage.security.SecurityUtils;
+import com.nosulkora.filestorage.security.UserPrincipal;
 import com.nosulkora.filestorage.service.UserService;
 import com.nosulkora.filestorage.utils.ReactiveWrapper;
 import org.slf4j.Logger;
@@ -63,7 +64,7 @@ public class UserServiceImpl implements UserService {
     @Override
     public Mono<UserDto> update(UserDto userDto) {
         validateUsername(userDto.getUsername());
-        return getCurrentUserEntity()
+        return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> getTargetUserIfExist(userDto.getId())
                         .flatMap(targetUser -> checkWriteAccess(currentUser, targetUser))
                         .flatMap(targetUser -> {
@@ -83,7 +84,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Mono<Void> delete(Integer userId) {
-        return getCurrentUserEntity()
+        return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> getTargetUserIfExist(userId)
                         .flatMap(targetUser -> checkWriteAccess(currentUser, targetUser)))
                 .flatMap(targetUser -> ReactiveWrapper.voidOperation(() -> userRepository.deleteById(userId))
@@ -93,7 +94,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Mono<UserDto> findById(Integer userId) {
-        return getCurrentUserEntity()
+        return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> getTargetUserIfExist(userId)
                         .flatMap(targetUser -> checkReadAccess(currentUser, targetUser)))
                 .map(UserMapper::toDto)
@@ -102,21 +103,21 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Flux<UserDto> findAll() {
-        return getCurrentUserEntity()
+        return SecurityUtils.getCurrentUser()
                 .flatMapMany(currentUser -> {
                     if (currentUser.getRole().equals(UserRole.ADMIN) ||
                         currentUser.getRole().equals(UserRole.MODERATOR)) {
-                        LOGGER.info("User {} requested all users", currentUser.getUsername());
+                        LOGGER.info("User {} requested all users", currentUser.getName());
                         return ReactiveWrapper.flux(userRepository::findAll).map(UserMapper::toDto);
                     }
-                    LOGGER.warn("Access denied: User {} attempted to fetch all users", currentUser.getUsername());
+                    LOGGER.warn("Access denied: User {} attempted to fetch all users", currentUser.getName());
                     return Flux.error(new AccessDeniedException("Only MODERATOR or ADMIN can view all users"));
                 });
     }
 
     @Override
     public Mono<UserDto> findByUsername(String username) {
-        return getCurrentUserEntity()
+        return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> ReactiveWrapper.monoOptional(() -> userRepository.findByUsername(username))
                         .switchIfEmpty(Mono.error(new NotFoundException("User not found with username: " + username)))
                         .flatMap(targetUser -> checkReadAccess(currentUser, targetUser)))
@@ -138,7 +139,7 @@ public class UserServiceImpl implements UserService {
                         return Mono.error(new AccessDeniedException("Invalid username or password"));
                     }
                     // Генерируем JWT токен
-                    String token = jwtTokenProvider.createToken(user.getUsername(), user.getRole().name());
+                    String token = jwtTokenProvider.createToken(user.getId(), user.getUsername(), user.getRole().name());
                     return Mono.just(new AuthResponseDto(token));
                 });
     }
@@ -164,30 +165,24 @@ public class UserServiceImpl implements UserService {
                 .switchIfEmpty(Mono.error(new NotFoundException("User not found with ID: " + userId)));
     }
 
-    private Mono<User> checkWriteAccess(User currentUser, User targetUser) {
+    private Mono<User> checkWriteAccess(UserPrincipal currentUser, User targetUser) {
         if (currentUser.getRole().equals(UserRole.ADMIN) || currentUser.getId().equals(targetUser.getId())) {
             return Mono.just(targetUser);
         }
         LOGGER.warn("Access denied: User {} attempted to modify profile of user {}",
-                currentUser.getUsername(), targetUser.getId());
+                currentUser.getName(), targetUser.getId());
         return Mono.error(new AccessDeniedException("You can only modify your own profile"));
     }
 
-    private Mono<User> checkReadAccess(User currentUser, User targetUser) {
+    private Mono<User> checkReadAccess(UserPrincipal currentUser, User targetUser) {
         if (currentUser.getRole().equals(UserRole.ADMIN) ||
             currentUser.getRole().equals(UserRole.MODERATOR) ||
             currentUser.getId().equals(targetUser.getId())) {
             return Mono.just(targetUser);
         }
         LOGGER.warn("Access denied: User {} attempted to view profile of user {}",
-                currentUser.getUsername(), targetUser.getId());
+                currentUser.getName(), targetUser.getId());
         return Mono.error(new AccessDeniedException("You can only view your own profile"));
-    }
-
-    private Mono<User> getCurrentUserEntity() {
-        return SecurityUtils.getCurrentUserName()
-                .flatMap(username -> ReactiveWrapper.monoOptional(() -> userRepository.findByUsername(username)))
-                .switchIfEmpty(Mono.error(new NotFoundException("Current authenticated user not found in DB")));
     }
 
     private Mono<User> saveUserEntity(User user) {

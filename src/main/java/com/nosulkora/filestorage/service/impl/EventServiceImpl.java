@@ -13,6 +13,7 @@ import com.nosulkora.filestorage.repository.EventRepository;
 import com.nosulkora.filestorage.repository.FileRepository;
 import com.nosulkora.filestorage.repository.UserRepository;
 import com.nosulkora.filestorage.security.SecurityUtils;
+import com.nosulkora.filestorage.security.UserPrincipal;
 import com.nosulkora.filestorage.service.EventService;
 import com.nosulkora.filestorage.utils.ReactiveWrapper;
 import org.slf4j.Logger;
@@ -62,43 +63,48 @@ public class EventServiceImpl implements EventService {
 
     @Override
     public Mono<EventDto> update(EventDto eventDto) {
-        return checkEventManagerAccess()
-                .then(getEventIfExist(eventDto.getId()))
-                .flatMap(existingEvent -> {
-                    if (eventDto.getStatus() != null) {
-                        existingEvent.setStatus(EventStatus.UPDATED);
-                    }
-                    existingEvent.setTimeStamp(LocalDateTime.now());
-                    return saveEventEntity(existingEvent);
-                })
-                .map(EventMapper::toDto)
-                .doOnSuccess(updated -> LOGGER.info("Event updated successfully with ID: {}", updated.getId()));
+        return SecurityUtils.getCurrentUser()
+                .flatMap(principal -> checkEventManagementAccess(principal)
+                        .then(getEventIfExist(eventDto.getId()))
+                        .flatMap(existingEvent -> {
+                            if (eventDto.getStatus() != null) {
+                                existingEvent.setStatus(EventStatus.UPDATED);
+                            }
+                            existingEvent.setTimeStamp(LocalDateTime.now());
+                            return saveEventEntity(existingEvent);
+                        })
+                        .map(EventMapper::toDto)
+                        .doOnSuccess(updated ->
+                                LOGGER.info("Event updated successfully with ID: {}", updated.getId())));
     }
 
     @Override
     public Mono<Void> delete(Integer id) {
-        return checkEventManagerAccess()
-                .then(getEventIfExist(id)) // Проверяем, что событие существует.
-                .flatMap(event -> ReactiveWrapper.voidOperation(() -> eventRepository.deleteById(id)))
-                .doOnSuccess(v -> LOGGER.info("Event deleted successfully with ID: {}", id));
+        return SecurityUtils.getCurrentUser()
+                .flatMap(principal -> checkEventManagementAccess(principal)
+                        .then(getEventIfExist(id)) // Проверяем, что событие существует.
+                        .flatMap(event -> ReactiveWrapper.voidOperation(() -> eventRepository.deleteById(id)))
+                        .doOnSuccess(v -> LOGGER.info("Event deleted successfully with ID: {}", id)));
     }
 
     @Override
     public Mono<EventDto> findById(Integer id) {
-        return checkEventManagerAccess()
-                .then(getEventIfExist(id))
-                .map(EventMapper::toDto)
-                .doOnNext(dto -> LOGGER.info("Event retrieved: ID {}", dto.getId()));
+        return SecurityUtils.getCurrentUser()
+                .flatMap(principal -> checkEventManagementAccess(principal)
+                        .then(getEventIfExist(id))
+                        .map(EventMapper::toDto)
+                        .doOnNext(dto -> LOGGER.info("Event retrieved: ID {}", dto.getId())));
     }
 
     @Override
     public Flux<EventDto> findAll() {
-        return checkEventManagerAccess()
-                .thenMany(Flux.defer(() -> {
-                    LOGGER.info("Fetching all events from database");
-                    return ReactiveWrapper.flux(eventRepository::findAll)
-                            .map(EventMapper::toDto);
-                }));
+        return SecurityUtils.getCurrentUser()
+                .flatMapMany(principal -> checkEventManagementAccess(principal)
+                        .thenMany(Flux.defer(() -> {
+                            LOGGER.info("Fetching all events from database");
+                            return ReactiveWrapper.flux(eventRepository::findAll)
+                                    .map(EventMapper::toDto);
+                        })));
     }
 
     // --- Вспомогательные методы ---
@@ -118,19 +124,14 @@ public class EventServiceImpl implements EventService {
                 .switchIfEmpty(Mono.error(new NotFoundException("Event not found by ID: " + eventId)));
     }
 
-    private Mono<Void> checkEventManagerAccess() {
-        return SecurityUtils.getCurrentUserName()
-                .flatMap(username -> ReactiveWrapper.monoOptional(() -> userRepository.findByUsername(username)))
-                .switchIfEmpty(Mono.error(new NotFoundException("Current authenticated user not found in DB")))
-                .flatMap(currentUser -> {
-                    UserRole role = currentUser.getRole();
-                    if (role.equals(UserRole.ADMIN) || role.equals(UserRole.MODERATOR)) {
-                        return Mono.empty();
-                    }
-                    LOGGER.warn("Access denied: User {} with role {} attempted to manage events",
-                            currentUser.getUsername(), role);
-                    return Mono.error(new AccessDeniedException("Only MODERATOR or ADMIN can manage events"));
-                });
+    private Mono<Void> checkEventManagementAccess(UserPrincipal principal) {
+        UserRole role = principal.getRole();
+        if (role.equals(UserRole.ADMIN) || role.equals(UserRole.MODERATOR)) {
+            return Mono.empty();
+        }
+        LOGGER.warn("Access denied: User {} with role {} attempted to manage events",
+                principal.getName(), role);
+        return Mono.error(new AccessDeniedException("Only MODERATOR or ADMIN can manage events"));
     }
 
     private Mono<Event> saveEventEntity(Event event) {
