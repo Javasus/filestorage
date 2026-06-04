@@ -13,11 +13,11 @@ public class Event {
     private Integer id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user", nullable = false)
+    @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "file", nullable = false)
+    @JoinColumn(name = "file_id", nullable = false)
     private File file;
 
     @Enumerated(EnumType.STRING)

@@ -36,7 +36,7 @@ public class SecurityConfig {
                                 .accessDeniedHandler((exchange, e) -> Mono.fromRunnable(() ->
                                         exchange.getResponse().setStatusCode(HttpStatus.FORBIDDEN))))
                 .authorizeExchange(exchanges -> exchanges
-                        .pathMatchers("/auth/**", "/swagger-ui/**", "/v3/api-docs/**")
+                        .pathMatchers("/api/auth/**", "/swagger-ui/**", "/v3/api-docs/**")
                                 .permitAll() // Открытые эндпоинты.
                         .anyExchange().authenticated()) // все остальные требуют jwt.
                 // Добавляем наш JWT фильтр прямо перед стандартным фильтром аутентификации

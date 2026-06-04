@@ -101,13 +101,14 @@ public class FileServiceImpl implements FileService {
                     // 1. Находим файл для получения его Location URL и проверки прав
                     return getFileIfExist(fileId)
                             .flatMap(file -> checkFileAccess(file, principal))
-                            .flatMap(file -> {
-                                String fileLocation = file.getLocation();
-                                // 2. Удаляем физический файл из MinIO
-                                return storageService.deleteFile(fileLocation)
-                                        // 3. Удаляем метаданные из БД и создаем Event
-                                        .then(deleteFileFromDb(fileId))
-                                        .then(createEvent(principal.getId(), fileId, EventStatus.DELETED));
+                            .flatMap(existingFile -> {
+                                // 2. Меняем статус у файла и обновляем его в БД
+                                existingFile.setStatus(FileStatus.ARCHIVED);
+                                return saveFile(existingFile)
+                                        // 3. Создаём event об удалении
+                                        .flatMap(updatedFile ->
+                                                createEvent(principal.getId(), fileId, EventStatus.DELETED))
+                                        .then();
                             });
                 });
     }
@@ -119,11 +120,7 @@ public class FileServiceImpl implements FileService {
                     validateFileId(fileId);
                     return getFileIfExist(fileId)
                             .flatMap(file -> checkFileAccess(file, principal))
-                            .map(FileMapper::toDto)
-                            .doOnNext(fileDto -> LOGGER.debug(
-                                    "File found: {} by user {}",
-                                    fileDto.getName(),
-                                    principal.getName()));
+                            .map(file -> FileMapper.toDto((File) file));
                 });
     }
 
@@ -134,11 +131,11 @@ public class FileServiceImpl implements FileService {
                     LOGGER.debug("User {} requested all files", principal.getName());
                     // USER видит только все свои файлы.
                     if (principal.getRole().equals(UserRole.USER)) {
-                        return ReactiveWrapper.flux(() -> fileRepository.findByUserId(principal.getId()))
+                        return ReactiveWrapper.<File>flux(() -> fileRepository.findByUserId(principal.getId()))
                                 .map(FileMapper::toDto);
                     }
                     // ADMIN & MODERATOR видят файлы всех пользователей.
-                    return ReactiveWrapper.flux(fileRepository::findAll)
+                    return ReactiveWrapper.<File>flux(fileRepository::findAll)
                             .map(FileMapper::toDto);
                 });
     }
