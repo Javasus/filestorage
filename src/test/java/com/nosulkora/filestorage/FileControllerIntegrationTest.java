@@ -195,4 +195,7 @@ public class FileControllerIntegrationTest extends BaseIntegrationTest {
         assertThat(existInDb).isTrue();
     }
 
+    // TODO
+    // 1. Написать тест где в сервис обращается пользователь у которого status = BLOCKED.
+
 }

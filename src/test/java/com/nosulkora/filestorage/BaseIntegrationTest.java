@@ -90,19 +90,19 @@ public class BaseIntegrationTest {
         userRepository.deleteAll();
 
         // 2. Инициализируем пул пользователей через фабрику
-       adminUser = userFactory.builder()
-               .username("test_admin")
-               .role(UserRole.ADMIN)
-               .build();
+        adminUser = userFactory.builder()
+                .username("test_admin")
+                .role(UserRole.ADMIN)
+                .build();
 
-       moderatorUser = userFactory.builder()
-               .username("test_moderator")
-               .role(UserRole.MODERATOR)
-               .build();
+        moderatorUser = userFactory.builder()
+                .username("test_moderator")
+                .role(UserRole.MODERATOR)
+                .build();
 
-       regularUser1 = userFactory.builder()
-               .username("test_user1")
-               .build();
+        regularUser1 = userFactory.builder()
+                .username("test_user1")
+                .build();
 
         regularUser2 = userFactory.builder()
                 .username("test_user2")
@@ -116,7 +116,7 @@ public class BaseIntegrationTest {
     }
 
     /**
-     *  Быстрая генерация авторизированного клиента.
+     * Быстрая генерация авторизированного клиента.
      */
     protected WebTestClient clientWithAuth(String token) {
         return webTestClient.mutate()
@@ -144,6 +144,11 @@ public class BaseIntegrationTest {
     // ----- Вспомогательные методы -----
 
     private String generateTokenFor(User user) {
-        return tokenProvider.createToken(user.getId(), user.getUsername(), user.getRole().name());
+        return tokenProvider.createToken(
+                user.getId(),
+                user.getUsername(),
+                user.getRole().name(),
+                user.getStatus().name()
+        );
     }
 }

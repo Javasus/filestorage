@@ -81,9 +81,6 @@ public class FileServiceImpl implements FileService {
                             .flatMap(existingFile -> checkFileAccess(existingFile, principal))
                             .flatMap(existingFile -> {
                                 existingFile.setName(fileDto.getName());
-                                existingFile.setLocation(fileDto.getLocation());
-                                existingFile.setStatus(
-                                        fileDto.getStatus() != null ? fileDto.getStatus() : existingFile.getStatus());
                                 return saveFile(existingFile)
                                         .flatMap(updatedFile ->
                                                 createEvent(principal.getId(), updatedFile.getId(), EventStatus.UPDATED)
