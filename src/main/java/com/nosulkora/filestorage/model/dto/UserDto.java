@@ -16,11 +16,12 @@ public class UserDto {
     public UserDto() {
     }
 
-    public UserDto(Integer id, String username, UserStatus status, UserRole role) {
+    public UserDto(Integer id, String username, UserStatus status, UserRole role, String password) {
         this.id = id;
         this.username = username;
         this.status = status;
         this.role = role;
+        this.password = password;
     }
 
     public Integer getId() {

@@ -42,3 +42,11 @@ logging:
     name: logs/filestorage.log
     max-size: 10MB
     max-history: 30
+
+springdoc:
+  swagger-ui:
+    # Отключает проверку обновлений и внешние валидаторы
+    validator-url: none
+  # Заставляет генерировать JSON-спецификацию локально
+  api-docs:
+    enabled: true

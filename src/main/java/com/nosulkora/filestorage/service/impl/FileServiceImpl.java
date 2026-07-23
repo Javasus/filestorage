@@ -81,9 +81,6 @@ public class FileServiceImpl implements FileService {
                             .flatMap(existingFile -> checkFileAccess(existingFile, principal))
                             .flatMap(existingFile -> {
                                 existingFile.setName(fileDto.getName());
-                                existingFile.setLocation(fileDto.getLocation());
-                                existingFile.setStatus(
-                                        fileDto.getStatus() != null ? fileDto.getStatus() : existingFile.getStatus());
                                 return saveFile(existingFile)
                                         .flatMap(updatedFile ->
                                                 createEvent(principal.getId(), updatedFile.getId(), EventStatus.UPDATED)
@@ -101,13 +98,14 @@ public class FileServiceImpl implements FileService {
                     // 1. Находим файл для получения его Location URL и проверки прав
                     return getFileIfExist(fileId)
                             .flatMap(file -> checkFileAccess(file, principal))
-                            .flatMap(file -> {
-                                String fileLocation = file.getLocation();
-                                // 2. Удаляем физический файл из MinIO
-                                return storageService.deleteFile(fileLocation)
-                                        // 3. Удаляем метаданные из БД и создаем Event
-                                        .then(deleteFileFromDb(fileId))
-                                        .then(createEvent(principal.getId(), fileId, EventStatus.DELETED));
+                            .flatMap(existingFile -> {
+                                // 2. Меняем статус у файла и обновляем его в БД
+                                existingFile.setStatus(FileStatus.ARCHIVED);
+                                return saveFile(existingFile)
+                                        // 3. Создаём event об удалении
+                                        .flatMap(updatedFile ->
+                                                createEvent(principal.getId(), fileId, EventStatus.DELETED))
+                                        .then();
                             });
                 });
     }
@@ -119,11 +117,7 @@ public class FileServiceImpl implements FileService {
                     validateFileId(fileId);
                     return getFileIfExist(fileId)
                             .flatMap(file -> checkFileAccess(file, principal))
-                            .map(FileMapper::toDto)
-                            .doOnNext(fileDto -> LOGGER.debug(
-                                    "File found: {} by user {}",
-                                    fileDto.getName(),
-                                    principal.getName()));
+                            .map(file -> FileMapper.toDto((File) file));
                 });
     }
 
@@ -134,11 +128,11 @@ public class FileServiceImpl implements FileService {
                     LOGGER.debug("User {} requested all files", principal.getName());
                     // USER видит только все свои файлы.
                     if (principal.getRole().equals(UserRole.USER)) {
-                        return ReactiveWrapper.flux(() -> fileRepository.findByUserId(principal.getId()))
+                        return ReactiveWrapper.<File>flux(() -> fileRepository.findByUserId(principal.getId()))
                                 .map(FileMapper::toDto);
                     }
                     // ADMIN & MODERATOR видят файлы всех пользователей.
-                    return ReactiveWrapper.flux(fileRepository::findAll)
+                    return ReactiveWrapper.<File>flux(fileRepository::findAll)
                             .map(FileMapper::toDto);
                 });
     }
@@ -197,13 +191,6 @@ public class FileServiceImpl implements FileService {
         return eventService.create(eventDto)
                 .doOnSuccess(v -> LOGGER.info("Event {} create for file ID: {}", eventStatus, fileId))
                 .then();
-    }
-
-    private Mono<Void> deleteFileFromDb(Integer fileId) {
-        return ReactiveWrapper.voidOperation(() -> {
-            fileRepository.deleteById(fileId);
-            LOGGER.info("File record deleted from DB with ID: {}", fileId);
-        });
     }
 
     private Mono<File> getFileIfExist(Integer fileId) {

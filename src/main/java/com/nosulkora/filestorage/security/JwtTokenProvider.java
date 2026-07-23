@@ -24,6 +24,7 @@ public class JwtTokenProvider {
     private static final Logger LOGGER = LoggerFactory.getLogger(JwtTokenProvider.class);
     private static final String ROLE_CLAIM = "role";
     private static final String ID_CLAIM = "id";
+    private static final String STATUS = "status";
 
     private final SecretKey secretKey;
     private final long validityInMilliseconds;
@@ -36,7 +37,7 @@ public class JwtTokenProvider {
         this.validityInMilliseconds = validityInMilliseconds;
     }
 
-    public String createToken(Integer id, String username, String role) {
+    public String createToken(Integer id, String username, String role, String status) {
         Date now = new Date();
         Date validity = new Date(now.getTime() + validityInMilliseconds);
 
@@ -44,6 +45,7 @@ public class JwtTokenProvider {
                 .subject(username)
                 .claim(ID_CLAIM, id)
                 .claim(ROLE_CLAIM, role)
+                .claim(STATUS, status)
                 .issuedAt(now)
                 .expiration(validity)
                 .signWith(secretKey, Jwts.SIG.HS256)
