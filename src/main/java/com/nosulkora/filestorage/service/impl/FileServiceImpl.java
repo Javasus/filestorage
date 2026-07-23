@@ -193,13 +193,6 @@ public class FileServiceImpl implements FileService {
                 .then();
     }
 
-    private Mono<Void> deleteFileFromDb(Integer fileId) {
-        return ReactiveWrapper.voidOperation(() -> {
-            fileRepository.deleteById(fileId);
-            LOGGER.info("File record deleted from DB with ID: {}", fileId);
-        });
-    }
-
     private Mono<File> getFileIfExist(Integer fileId) {
         return ReactiveWrapper.monoOptional(() ->
                         fileRepository.findById(fileId))

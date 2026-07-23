@@ -2,7 +2,6 @@ package com.nosulkora.filestorage.service.impl;
 
 import com.nosulkora.filestorage.exception.AccessDeniedException;
 import com.nosulkora.filestorage.exception.NotFoundException;
-import com.nosulkora.filestorage.exception.ValidationException;
 import com.nosulkora.filestorage.mapper.UserMapper;
 import com.nosulkora.filestorage.model.dto.AuthRequestDto;
 import com.nosulkora.filestorage.model.dto.AuthResponseDto;
@@ -14,7 +13,9 @@ import com.nosulkora.filestorage.repository.UserRepository;
 import com.nosulkora.filestorage.security.JwtTokenProvider;
 import com.nosulkora.filestorage.security.SecurityUtils;
 import com.nosulkora.filestorage.security.UserPrincipal;
+import com.nosulkora.filestorage.service.UserSecurityChecker;
 import com.nosulkora.filestorage.service.UserService;
+import com.nosulkora.filestorage.service.UserValidator;
 import com.nosulkora.filestorage.utils.ReactiveWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,25 +34,32 @@ public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
+    private final UserValidator userValidator;
+    private final UserSecurityChecker userSecurityChecker;
 
     public UserServiceImpl(
             UserRepository userRepository,
             PasswordEncoder passwordEncoder,
-            JwtTokenProvider jwtTokenProvider
+            JwtTokenProvider jwtTokenProvider,
+            UserValidator userValidator,
+            UserSecurityChecker userSecurityChecker
     ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
+        this.userValidator = userValidator;
+        this.userSecurityChecker = userSecurityChecker;
     }
 
     @Override
     public Mono<UserDto> create(UserDto userDto) {
-        validateUsername(userDto.getUsername());
-        return checkUserDoesNotExist(userDto.getUsername())
+        userValidator.validateUsername(userDto.getUsername());
+        userValidator.validateUserPassword(userDto.getPassword());
+        return userSecurityChecker.checkUserDoesNotExist(userDto.getUsername())
                 .then(Mono.defer(() -> {
                     User user = UserMapper.toEntity(userDto);
                     user.setStatus(UserStatus.ACTIVE);
-                    user.setRole(userDto.getRole() == null ? UserRole.USER : userDto.getRole());
+                    user.setRole(UserRole.USER);
                     // Хэшируем пароль перед сохранением.
                     user.setPasswordHash(passwordEncoder.encode(userDto.getPassword()));
                     return saveUserEntity(user);
@@ -65,13 +73,14 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Mono<UserDto> update(UserDto userDto) {
-        validateUsername(userDto.getUsername());
+        userValidator.validateUsername(userDto.getUsername());
         return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> {
-                    boolean isOwner = currentUser.getId().equals(userDto.getId());
-                    return checkReadAndWriteAccess(currentUser, isOwner, List.of(UserRole.ADMIN))
-                            .then(getTargetUserIfExist(userDto.getId()))
-                            .flatMap(targetUser -> changeUserRoleAndFields(userDto, targetUser, currentUser))
+                    boolean isOwner = isOwner(currentUser, userDto.getId());
+                    return userSecurityChecker.validateResourceAccess(currentUser, isOwner, List.of(UserRole.ADMIN))
+                            .then(userSecurityChecker.getTargetUserIfExist(userDto.getId()))
+                            .flatMap(targetUser -> userSecurityChecker.validateAccountStatusForActions(currentUser, targetUser))
+                            .flatMap(targetUser -> userSecurityChecker.changeUserRoleAndFields(userDto, targetUser, currentUser))
                             .flatMap(this::saveUserEntity);
                 })
                 .map(UserMapper::toDto)
@@ -82,11 +91,11 @@ public class UserServiceImpl implements UserService {
     public Mono<Void> delete(Integer userId) {
         return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> {
-                    boolean isOwner = currentUser.getId().equals(userId);
-                    return checkReadAndWriteAccess(currentUser, isOwner, List.of(UserRole.ADMIN))
-                            .then(getTargetUserIfExist(userId))
+                    boolean isOwner = isOwner(currentUser, userId);
+                    return userSecurityChecker.validateResourceAccess(currentUser, isOwner, List.of(UserRole.ADMIN))
+                            .then(userSecurityChecker.getTargetUserIfExist(userId))
                             .flatMap(targetUser -> {
-                                if (targetUser.getStatus() == UserStatus.BLOCKED) {
+                                if (userSecurityChecker.isAccountBlocked(targetUser)) {
                                     return Mono.empty();
                                 }
                                 targetUser.setStatus(UserStatus.BLOCKED);
@@ -104,9 +113,10 @@ public class UserServiceImpl implements UserService {
     public Mono<UserDto> findById(Integer userId) {
         return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> {
-                    boolean isOwner = currentUser.getId().equals(userId);
-                    return checkReadAndWriteAccess(currentUser, isOwner, List.of(UserRole.ADMIN, UserRole.MODERATOR))
-                            .then(getTargetUserIfExist(userId))
+                    boolean isOwner = isOwner(currentUser, userId);
+                    return userSecurityChecker.validateResourceAccess(currentUser, isOwner, List.of(UserRole.ADMIN, UserRole.MODERATOR))
+                            .then(userSecurityChecker.getTargetUserIfExist(userId))
+                            .flatMap(targetUser -> userSecurityChecker.validateAccountStatusForProfile(currentUser, targetUser))
                             .map(UserMapper::toDto);
                 })
                 .doOnNext(dto -> LOGGER.debug("User retrieved: {} with ID: {}", dto.getUsername(), dto.getId()));
@@ -117,7 +127,7 @@ public class UserServiceImpl implements UserService {
         return SecurityUtils.getCurrentUser()
                 .flatMapMany(currentUser -> {
                     // false - так как получать список могу только ADMIN & MODERATOR
-                    return checkReadAndWriteAccess(currentUser, false, List.of(UserRole.ADMIN, UserRole.MODERATOR))
+                    return userSecurityChecker.validateResourceAccess(currentUser, false, List.of(UserRole.ADMIN, UserRole.MODERATOR))
                             .thenMany(Flux.defer(() -> {
                                 LOGGER.info("User {} requested all users", currentUser.getName());
                                 return ReactiveWrapper.flux(userRepository::findAll).map(UserMapper::toDto);
@@ -129,10 +139,11 @@ public class UserServiceImpl implements UserService {
     public Mono<UserDto> findByUsername(String username) {
         return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> {
-                    boolean isOwner = currentUser.getName().equals(username);
-                    return checkReadAndWriteAccess(currentUser, isOwner, List.of(UserRole.ADMIN, UserRole.MODERATOR))
+                    boolean isOwner = isOwnerByUsername(currentUser, username);
+                    return userSecurityChecker.validateResourceAccess(currentUser, isOwner, List.of(UserRole.ADMIN, UserRole.MODERATOR))
                             .then(ReactiveWrapper.monoOptional(() -> userRepository.findByUsername(username)))
                             .switchIfEmpty(Mono.error(new NotFoundException("User not found with username: " + username)))
+                            .flatMap(targetUser -> userSecurityChecker.validateAccountStatusForProfile(currentUser, targetUser))
                             .map(UserMapper::toDto);
                 });
     }
@@ -163,72 +174,17 @@ public class UserServiceImpl implements UserService {
 
     // --- Вспомогательные методы ---
 
-    private void validateUsername(String username) {
-        if (username == null || username.trim().isEmpty()) {
-            LOGGER.error("Validation failed: Username cannot be empty");
-            throw new ValidationException("Username cannot be empty");
-        }
-    }
-
-    private Mono<Void> checkUserDoesNotExist(String username) {
-        return ReactiveWrapper.monoOptional(() -> userRepository.findByUsername(username))
-                .flatMap(user -> Mono.<Void>error(
-                        new ValidationException("User with username " + username + " already exists")))
-                .switchIfEmpty(Mono.empty());
-    }
-
-    private Mono<User> getTargetUserIfExist(Integer userId) {
-        return ReactiveWrapper.monoOptional(() -> userRepository.findById(userId))
-                .switchIfEmpty(Mono.error(new NotFoundException("User not found with ID: " + userId)));
-    }
-
-    /**
-     * Проверяет, что у пользователя есть права на изменение/удаление/получение данных пользователя без запроса в БД.
-     * <br> 1. Проверяет, что ID currentUser совпадает с ID пользователя по которому выполняется запрос.
-     * <br> 2. Проверяет, что роль currentUser позволяет выполнять запрошенное действие.
-     *
-     * @param currentUser  Текущий пользователь, который совершает запрос.
-     * @param isOwner      Флаг, который отвечает на вопрос. currentUser - это пользователь по которому совершается запрос?
-     * @param allowedRoles Список ролей который допускается до выполнения запроса.
-     * @return Mono<User>
-     */
-    private Mono<User> checkReadAndWriteAccess(
-            UserPrincipal currentUser,
-            boolean isOwner,
-            List<UserRole> allowedRoles
-    ) {
-        if (isOwner || allowedRoles.contains(currentUser.getRole())) {
-            return Mono.empty(); // Права подтверждены, продолжаем цепочку
-        }
-        LOGGER.warn("Access denied: User {} with role {} attempted unauthorized access",
-                currentUser.getName(), currentUser.getRole());
-        return Mono.error(new AccessDeniedException("You do not have permission to perform this action."));
-    }
-
     private Mono<User> saveUserEntity(User user) {
         return ReactiveWrapper.mono(() -> userRepository.save(user));
     }
 
-    /**
-     * Проверяет права на изменение роли и обновляет поля сущности USER перед сохранением.
-     */
-    private Mono<User> changeUserRoleAndFields(UserDto userDto, User targetUser, UserPrincipal currentUser) {
-        if (userDto.getRole() != null && !userDto.getRole().equals(targetUser.getRole())) {
-            if (!currentUser.getRole().equals(UserRole.ADMIN)) {
-                LOGGER.warn(
-                        "Access denied: User {} attempted to change role to {}",
-                        currentUser.getName(),
-                        userDto.getRole());
-                return Mono.error(new AccessDeniedException("Only ADMIN can change user roles."));
-            }
-            // Если это ADMIN — разрешаем смену роли
-            targetUser.setRole(userDto.getRole());
-        }
+    // Атомарные предикаты
 
-        // Обновляем остальные текстовые поля и статус
-        targetUser.setUsername(userDto.getUsername());
-        targetUser.setStatus(userDto.getStatus() != null ? userDto.getStatus() : targetUser.getStatus());
+    private boolean isOwner(UserPrincipal currentUser, Integer targetUserId) {
+        return currentUser.getId().equals(targetUserId);
+    }
 
-        return Mono.just(targetUser);
+    private boolean isOwnerByUsername(UserPrincipal currentUser, String targetUsername) {
+        return currentUser.getName().equals(targetUsername);
     }
 }

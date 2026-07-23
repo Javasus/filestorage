@@ -26,10 +26,16 @@ public class UserTestDataFactory {
 
     public class Builder {
 
+        private Integer id = 1;
         private String username = "user_" + UUID.randomUUID().toString().substring(0, 8);
         private String rawPassword = "password123";
         private UserStatus userStatus = UserStatus.ACTIVE;
         private UserRole userRole = UserRole.USER;
+
+        public Builder id(Integer id) {
+            this.id = id;
+            return this;
+        }
 
         public Builder username(String username) {
             this.username = username;
@@ -53,6 +59,7 @@ public class UserTestDataFactory {
 
         public User build() {
             User user = new User();
+            user.setId(id);
             user.setUsername(username);
             user.setPasswordHash(passwordEncoder.encode(rawPassword));
             user.setStatus(userStatus);
