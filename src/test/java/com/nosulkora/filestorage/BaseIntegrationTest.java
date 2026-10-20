@@ -85,24 +85,20 @@ public abstract class BaseIntegrationTest {
 
         // 2. Инициализируем пул пользователей через фабрику
         adminUser = userFactory.builder()
-                .id(777)
                 .username("test_admin")
                 .role(UserRole.ADMIN)
                 .build();
 
         moderatorUser = userFactory.builder()
-                .id(16)
                 .username("test_moderator")
                 .role(UserRole.MODERATOR)
                 .build();
 
         regularUser1 = userFactory.builder()
-                .id(1)
                 .username("test_user1")
                 .build();
 
         regularUser2 = userFactory.builder()
-                .id(2)
                 .username("test_user2")
                 .build();
 
@@ -146,7 +142,8 @@ public abstract class BaseIntegrationTest {
                 user.getId(),
                 user.getUsername(),
                 user.getRole().name(),
-                user.getStatus().name()
+                user.getStatus().name(),
+                user.getTokenVersion()
         );
     }
 }

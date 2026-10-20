@@ -31,6 +31,7 @@ public class UserTestDataFactory {
         private String rawPassword = "password123";
         private UserStatus userStatus = UserStatus.ACTIVE;
         private UserRole userRole = UserRole.USER;
+        private Integer tokenVersion = 1;
 
         public Builder id(Integer id) {
             this.id = id;
@@ -57,6 +58,11 @@ public class UserTestDataFactory {
             return this;
         }
 
+        public Builder tokenVersion(Integer tokenVersion) {
+            this.tokenVersion = tokenVersion;
+            return this;
+        }
+
         public User build() {
             User user = new User();
             user.setId(id);
@@ -64,6 +70,7 @@ public class UserTestDataFactory {
             user.setPasswordHash(passwordEncoder.encode(rawPassword));
             user.setStatus(userStatus);
             user.setRole(userRole);
+            user.setTokenVersion(tokenVersion);
             return userRepository.saveAndFlush(user);
         }
     }

@@ -25,6 +25,7 @@ public class JwtTokenProvider {
     private static final String ROLE_CLAIM = "role";
     private static final String ID_CLAIM = "id";
     private static final String STATUS = "status";
+    private static final String TOKEN_VERSION_CLAIM = "tv";
 
     private final SecretKey secretKey;
     private final long validityInMilliseconds;
@@ -37,7 +38,7 @@ public class JwtTokenProvider {
         this.validityInMilliseconds = validityInMilliseconds;
     }
 
-    public String createToken(Integer id, String username, String role, String status) {
+    public String createToken(Integer id, String username, String role, String status, Integer tokenVersion) {
         Date now = new Date();
         Date validity = new Date(now.getTime() + validityInMilliseconds);
 
@@ -46,6 +47,7 @@ public class JwtTokenProvider {
                 .claim(ID_CLAIM, id)
                 .claim(ROLE_CLAIM, role)
                 .claim(STATUS, status)
+                .claim(TOKEN_VERSION_CLAIM, tokenVersion)
                 .issuedAt(now)
                 .expiration(validity)
                 .signWith(secretKey, Jwts.SIG.HS256)

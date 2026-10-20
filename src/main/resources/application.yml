@@ -17,6 +17,9 @@ spring:
     enabled: true
     baseline-on-migrate: true
 
+  profiles:
+    active: dev
+
 minio:
   endpoint: http://localhost:9000
   access-key: minioadmin
@@ -24,7 +27,7 @@ minio:
   bucket: filestorage
 
 jwt:
-  secret: "your-super-secret-key-that-must-be-at-least-32-characters-long"
+  secret: ${JWT_SECRET:your-super-secret-key-that-must-be-at-least-32-characters-long}
   expiration: 3600000 # 1 час в миллисекундах
 
 logging:

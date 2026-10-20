@@ -1,6 +1,9 @@
 package com.nosulkora.filestorage.security;
 
+import com.nosulkora.filestorage.exception.NotFoundException;
 import com.nosulkora.filestorage.model.enums.UserRole;
+import com.nosulkora.filestorage.model.enums.UserStatus;
+import com.nosulkora.filestorage.service.UserService;
 import io.jsonwebtoken.Claims;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.core.io.buffer.DataBuffer;
@@ -24,9 +27,14 @@ public class JwtTokenFilter implements WebFilter {
 
     private static final String BEARER_PREFIX = "Bearer ";
     private final JwtTokenProvider tokenProvider;
+    private final UserService userService;
 
-    public JwtTokenFilter(JwtTokenProvider tokenProvider) {
+    public JwtTokenFilter(
+            JwtTokenProvider tokenProvider,
+            UserService userService
+    ) {
         this.tokenProvider = tokenProvider;
+        this.userService = userService;
     }
 
     @NotNull
@@ -42,23 +50,37 @@ public class JwtTokenFilter implements WebFilter {
 
                 // Достаём все нужные данные из распарсенного объекта Claims
                 String username = claims.getSubject();
-                Integer userId = claims.get("id", Integer.class);
-                String roleStr = claims.get("role", String.class);
-                String statusStr = claims.get("status", String.class);
+                Integer tokenVersionFromJwt = claims.get("tv", Integer.class);
 
-                if(statusStr.equals("BLOCKED")) {
-                    getBlockedResponse(exchange);
-                }
+                return userService.findSecurityInfoByUsername(username)
+                        // Если пользователь не найден в БД или произошла ошибка, сразу возвращаем 403, до контроллера
+                        .onErrorResume(Exception.class, e -> Mono.empty())
+                        .switchIfEmpty(Mono.defer(Mono::empty))
+                        .flatMap(securityInfo -> {
 
-                UserRole role = UserRole.valueOf(roleStr);
-                var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + roleStr));
+                            // Проверяем: если юзер заблокирован ИЛИ версия токена в БД изменилась — сбрасываем сессию
+                            if (securityInfo.getStatus() == UserStatus.BLOCKED ||
+                                !securityInfo.getTokenVersion().equals(tokenVersionFromJwt)) {
+                                return getBlockedResponse(exchange);
+                            }
 
-                // Создаем Principal и устанавливаем контекст
-                UserPrincipal principal = new UserPrincipal(userId, username, role);
-                var authentication = new UsernamePasswordAuthenticationToken(principal, null, authorities);
+                            // если все в порядке, продолжаем стандартную авторизацию
+                            Integer userId = claims.get("id", Integer.class);
+                            String roleStr = claims.get("role", String.class);
 
-                return chain.filter(exchange)
-                        .contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication));
+                            var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + roleStr));
+
+                            // Создаем Principal и устанавливаем контекст
+                            UserPrincipal principal = new UserPrincipal(userId, username, UserRole.valueOf(roleStr));
+                            var authentication = new UsernamePasswordAuthenticationToken(
+                                    principal, null, authorities);
+
+                            return chain.filter(exchange)
+                                    .contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication))
+                                    .then(Mono.just(true));
+                        })
+                        .switchIfEmpty(Mono.defer(() -> getBlockedResponse(exchange)))
+                        .then();
             }
         }
 
@@ -77,7 +99,7 @@ public class JwtTokenFilter implements WebFilter {
     /**
      * Отправляет пользователю JSON-сообщение о блокировке.
      */
-    private void getBlockedResponse(ServerWebExchange exchange) {
+    private Mono<Void> getBlockedResponse(ServerWebExchange exchange) {
         ServerHttpResponse response = exchange.getResponse();
         response.setStatusCode(HttpStatus.FORBIDDEN);
         response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
@@ -87,6 +109,6 @@ public class JwtTokenFilter implements WebFilter {
                 "{\"error\": \"Access Denied\", \"message\": \"Your account is blocked. Please contact support.\"}";
 
         DataBuffer buffer = response.bufferFactory().wrap(jsonBody.getBytes(StandardCharsets.UTF_8));
-        response.writeWith(Mono.just(buffer));
+        return response.writeWith(Mono.just(buffer));
     }
 }

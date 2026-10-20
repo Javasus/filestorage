@@ -10,6 +10,7 @@ import com.nosulkora.filestorage.model.entity.User;
 import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
 import com.nosulkora.filestorage.repository.UserRepository;
+import com.nosulkora.filestorage.repository.UserSecurityInfo;
 import com.nosulkora.filestorage.security.JwtTokenProvider;
 import com.nosulkora.filestorage.security.SecurityUtils;
 import com.nosulkora.filestorage.security.UserPrincipal;
@@ -19,6 +20,7 @@ import com.nosulkora.filestorage.service.UserValidator;
 import com.nosulkora.filestorage.utils.ReactiveWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -39,7 +41,7 @@ public class UserServiceImpl implements UserService {
 
     public UserServiceImpl(
             UserRepository userRepository,
-            PasswordEncoder passwordEncoder,
+            @Lazy PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
             UserValidator userValidator,
             UserSecurityChecker userSecurityChecker
@@ -127,7 +129,10 @@ public class UserServiceImpl implements UserService {
         return SecurityUtils.getCurrentUser()
                 .flatMapMany(currentUser -> {
                     // false - так как получать список могу только ADMIN & MODERATOR
-                    return userSecurityChecker.validateResourceAccess(currentUser, false, List.of(UserRole.ADMIN, UserRole.MODERATOR))
+                    return userSecurityChecker.validateResourceAccess(
+                                    currentUser,
+                                    false,
+                                    List.of(UserRole.ADMIN, UserRole.MODERATOR))
                             .thenMany(Flux.defer(() -> {
                                 LOGGER.info("User {} requested all users", currentUser.getName());
                                 return ReactiveWrapper.flux(userRepository::findAll).map(UserMapper::toDto);
@@ -167,9 +172,32 @@ public class UserServiceImpl implements UserService {
                             user.getId(),
                             user.getUsername(),
                             user.getRole().name(),
-                            user.getStatus().name());
+                            user.getStatus().name(),
+                            user.getTokenVersion());
                     return Mono.just(new AuthResponseDto(token));
                 });
+    }
+
+    @Override
+    public Mono<Void> logout() {
+        return SecurityUtils.getCurrentUser()
+                .flatMap(currentUser ->
+                        ReactiveWrapper.monoOptional(() -> userRepository.findByUsername(currentUser.getName()))
+                                .switchIfEmpty(Mono.error(
+                                        new NotFoundException("User with username: "
+                                                              + currentUser.getName() + " not found")))
+                                .flatMap(user -> {
+                                    // Инкрементируем версию токена
+                                    user.setTokenVersion(user.getTokenVersion() + 1);
+                                    return ReactiveWrapper.voidOperation(() -> userRepository.save(user));
+                                })
+                );
+    }
+
+    @Override
+    public Mono<UserSecurityInfo> findSecurityInfoByUsername(String username) {
+        return ReactiveWrapper.monoOptional(() -> userRepository.findSecurityInfoByUserName(username))
+                .switchIfEmpty(Mono.error(new NotFoundException("SecurityInfo not found with username: " + username)));
     }
 
     // --- Вспомогательные методы ---
