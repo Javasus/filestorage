@@ -89,25 +89,39 @@ public class UserSecurityChecker {
 
     /**
      * Проверяет права на изменение роли и обновляет поля сущности USER перед сохранением.
+     *
+     * @param userDto     Новые данные пользователя полученные в запросе.
+     * @param targetUser  Пользователь данные которого будут изменены.
+     * @param currentUser Пользователь, который меняет данные. (Может быть ADMIN)
      */
     public Mono<User> changeUserRoleAndFields(UserDto userDto, User targetUser, UserPrincipal currentUser) {
-        if (userDto.getRole() != null && !userDto.getRole().equals(targetUser.getRole())) {
-            if (!currentUser.getRole().equals(UserRole.ADMIN)) {
-                LOGGER.warn(
-                        "Access denied: User {} attempted to change role to {}",
-                        currentUser.getName(),
-                        userDto.getRole());
-                return Mono.error(new AccessDeniedException("Only ADMIN can change user roles."));
-            }
-            // Если это ADMIN — разрешаем смену роли
-            targetUser.setRole(userDto.getRole());
+        boolean roleChanged = userDto.getRole() != null && !userDto.getRole().equals(targetUser.getRole());
+        boolean statusChanged = userDto.getStatus() != null && !userDto.getStatus().equals(targetUser.getStatus());
+
+        // Если меняем только имя пользователя, то сразу его меняем.
+        if (!roleChanged && !statusChanged) {
+            targetUser.setUsername(userDto.getUsername());
+            return Mono.just(targetUser);
         }
 
-        // Обновляем остальные текстовые поля и статус
-        targetUser.setUsername(userDto.getUsername());
-        targetUser.setStatus(userDto.getStatus() != null ? userDto.getStatus() : targetUser.getStatus());
+        // Если меняем Роль или Статус тогда проверяем роль меняющего, если ADMIN тогда меняем данные.
+        return validateResourceAccess(currentUser, false, List.of(UserRole.ADMIN))
+                .then(Mono.fromSupplier(() -> {
+                    if (roleChanged) {
+                        targetUser.setRole(userDto.getRole());
+                    }
+                    if (statusChanged) {
+                        targetUser.setStatus(userDto.getStatus());
+                    }
 
-        return Mono.just(targetUser);
+                    // инкрементируем версию токена
+                    targetUser.setTokenVersion(targetUser.getTokenVersion() + 1);
+                    LOGGER.info("Token version incremented for user ID {}: critical data changed by ADMIN"
+                            , targetUser.getId());
+
+                    targetUser.setUsername(userDto.getUsername());
+                    return targetUser;
+                }));
     }
 
     // ----------------------- Работа с БД. -----------------------
@@ -124,4 +138,16 @@ public class UserSecurityChecker {
                 .switchIfEmpty(Mono.error(new NotFoundException("User not found with ID: " + userId)));
     }
 
+    // ------------------------- Вспомогательные методы-----------------------
+
+    private Mono<User> validateUserRole(UserDto userDto, UserPrincipal currentUser) {
+        if (!currentUser.getRole().equals(UserRole.ADMIN)) {
+            LOGGER.warn(
+                    "Access denied: User {} attempted to change role to {}",
+                    currentUser.getName(),
+                    userDto.getRole());
+            return Mono.error(new AccessDeniedException("Only ADMIN can change user roles."));
+        }
+        return Mono.empty();
+    }
 }

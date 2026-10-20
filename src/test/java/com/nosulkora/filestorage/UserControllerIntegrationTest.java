@@ -188,11 +188,12 @@ public class UserControllerIntegrationTest extends BaseIntegrationTest {
                 .exchange()
                 .expectStatus().isForbidden()
                 .expectBody()
-                .jsonPath("$.message").isEqualTo("User account is blocked");
+                .jsonPath("$.message").isEqualTo("Your account is blocked. Please contact support.");
 
         // 5. ------------------ USER МЕНЯЕТ СВОЙ СТАТУС НА ACTIVE. ------------------
 
         Map<String, Object> updateStatusRequest = Map.of(
+                "id", userId,
                 "username", username,
                 "status", "ACTIVE");
 
@@ -203,7 +204,8 @@ public class UserControllerIntegrationTest extends BaseIntegrationTest {
                 .exchange()
                 .expectStatus().isForbidden()
                 .expectBody()
-                .jsonPath("$.message").isEqualTo("User account is blocked. Access denied.");
+                .jsonPath("$.error").isEqualTo("Access Denied")
+                .jsonPath("$.message").isEqualTo("Your account is blocked. Please contact support.");
     }
 
     @DisplayName("""
@@ -333,7 +335,7 @@ public class UserControllerIntegrationTest extends BaseIntegrationTest {
                 .exchange()
                 .expectStatus().isForbidden()
                 .expectBody()
-                .jsonPath("$.message").isEqualTo("Only ADMIN can change user roles.");
+                .jsonPath("$.message").isEqualTo("You do not have permission to perform this action.");
 
         User user = userRepository.findById(regularUser1.getId()).stream()
                 .findFirst()
@@ -384,7 +386,7 @@ public class UserControllerIntegrationTest extends BaseIntegrationTest {
                 .exchange()
                 .expectStatus().isForbidden()
                 .expectBody()
-                .jsonPath("$.message").isEqualTo("Only ADMIN can change user roles.");
+                .jsonPath("$.message").isEqualTo("You do not have permission to perform this action.");
 
         User user2 = userRepository.findById(regularUser1.getId()).stream()
                 .findFirst()
@@ -515,5 +517,68 @@ public class UserControllerIntegrationTest extends BaseIntegrationTest {
                             .usingRecursiveFieldByFieldElementComparator()
                             .containsExactlyInAnyOrderElementsOf(userDtoList);
                 });
+    }
+
+    @DisplayName("""
+             Проверка механизма tokenVersion и инвалидации сессий:
+             1. USER успешно обращается к защищенному эндпоинту.
+             2. USER делает Logout (token_version в БД инкрементируется).
+             3. USER пытается повторно зайти по старому токену и получает 403 Forbidden.""")
+    @Test
+    void tokenVersionInvalidationWorkFlowTest() {
+        // 1. ------------------ USER ЗАПРАШИВАЕТ СВОЙ ПРОФИЛЬ ПО ID. ------------------
+        clientWithAuth(user1Token).get()
+                .uri("/api/users/" + regularUser1.getId())
+                .exchange()
+                .expectStatus().isOk();
+
+        // 2. -------------------------- USER ДЕЛАЕТ LOGOUT. ---------------------------
+        clientWithAuth(user1Token).post()
+                .uri("/api/auth/logout")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        // 3. --------- USER ПЫТАЕТСЯ ЗАЙТИ В СВОЙ ПРОФИЛЬ ИСПОЛЬЗЯ СТАРЫЙ ТОКЕН --------
+        clientWithAuth(user1Token).get()
+                .uri("/api/users/" + regularUser1.getId())
+                .exchange()
+                .expectStatus().isForbidden()
+                .expectBody()
+                .jsonPath("$.error").isEqualTo("Access Denied")
+                .jsonPath("$.message").isEqualTo("Your account is blocked. Please contact support.");
+    }
+
+    @DisplayName("""
+            Проверка механизма tokenVersion при блокировании пользователя ADMIN:
+            1. USER запрашивает свой профиль по ID.
+            2. ADMIN блокирует пользователя.
+            3. USER совершает повторный запрос своего профиля по ID.""")
+    @Test
+    void tokenVersionAdminBlockedUserSuccessTest() {
+        // 1. ----------------------- USER ЗАПРАШИВАЕТ СВОЙ ПРОФИЛЬ ПО ID. --------------------
+        clientWithAuth(user1Token).get()
+                .uri("/api/users/" + regularUser1.getId())
+                .exchange()
+                .expectStatus().isOk();
+
+        // 2. -------------------------- ADMIN БЛОКИРУЕТ ПОЛЬЗОВАТЕЛЯ. ------------------------
+        Map<String, Object> updateStatusRequest = Map.of(
+                "username", regularUser1.getUsername(),
+                "status", "BLOCKED");
+        clientWithAuth(adminToken).put()
+                .uri("/api/users/" + regularUser1.getId())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(updateStatusRequest)
+                .exchange()
+                .expectStatus().isOk();
+
+        // 3. ----------------------- USER ПОВТОРНО ЗАПРАШИВАЕТ СВОЙ ПРОФИЛЬ ПО ID. --------------------
+        clientWithAuth(user1Token).get()
+                .uri("/api/users/" + regularUser1.getId())
+                .exchange()
+                .expectStatus().isForbidden()
+                .expectBody()
+                .jsonPath("$.error").isEqualTo("Access Denied")
+                .jsonPath("$.message").isEqualTo("Your account is blocked. Please contact support.");
     }
 }

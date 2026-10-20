@@ -47,6 +47,9 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	testLogging {
+		events "passed", "skipped", "failed"
+	}
 }
 
 // Принудительное разрешение конфликта версий для Testcontainers и MinIO

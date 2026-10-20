@@ -25,6 +25,9 @@ public class User {
     @Column(nullable = false)
     private UserRole role; // ADMIN, MODERATOR, USER
 
+    @Column(name = "token_version", nullable = false)
+    private Integer tokenVersion = 1;
+
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<Event> events;
 
@@ -106,5 +109,13 @@ public class User {
 
     public void setFiles(List<File> files) {
         this.files = files;
+    }
+
+    public Integer getTokenVersion() {
+        return tokenVersion;
+    }
+
+    public void setTokenVersion(Integer tokenVersion) {
+        this.tokenVersion = tokenVersion;
     }
 }

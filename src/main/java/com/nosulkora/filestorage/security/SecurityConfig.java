@@ -1,5 +1,6 @@
 package com.nosulkora.filestorage.security;
 
+import com.nosulkora.filestorage.service.UserService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -18,9 +19,14 @@ import reactor.core.publisher.Mono;
 public class SecurityConfig {
 
     private final JwtTokenProvider tokenProvider;
+    private final UserService userService;
 
-    public SecurityConfig(JwtTokenProvider tokenProvider) {
+    public SecurityConfig(
+            JwtTokenProvider tokenProvider,
+            UserService userService
+    ) {
         this.tokenProvider = tokenProvider;
+        this.userService = userService;
     }
 
     @Bean
@@ -40,7 +46,7 @@ public class SecurityConfig {
                                 .permitAll() // Открытые эндпоинты.
                         .anyExchange().authenticated()) // все остальные требуют jwt.
                 // Добавляем наш JWT фильтр прямо перед стандартным фильтром аутентификации
-                .addFilterBefore(new JwtTokenFilter(tokenProvider), SecurityWebFiltersOrder.AUTHENTICATION)
+                .addFilterBefore(new JwtTokenFilter(tokenProvider, userService), SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();
     }
 

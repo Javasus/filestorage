@@ -10,13 +10,18 @@ import com.nosulkora.filestorage.model.entity.User;
 import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
 import com.nosulkora.filestorage.repository.UserRepository;
+import com.nosulkora.filestorage.repository.UserSecurityInfo;
 import com.nosulkora.filestorage.security.JwtTokenProvider;
 import com.nosulkora.filestorage.security.SecurityUtils;
 import com.nosulkora.filestorage.security.UserPrincipal;
+import com.nosulkora.filestorage.service.UserSecurityChecker;
+import com.nosulkora.filestorage.service.UserValidator;
 import com.nosulkora.filestorage.service.impl.UserServiceImpl;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -29,7 +34,6 @@ import reactor.test.StepVerifier;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -46,7 +50,10 @@ public class UserServiceImplTest {
     @Mock
     private JwtTokenProvider jwtTokenProvider;
 
-    @InjectMocks
+    private UserSecurityChecker userSecurityChecker;
+
+    private UserValidator userValidator;
+
     private UserServiceImpl userService;
 
     private MockedStatic<SecurityUtils> mockedSecurityUtils;
@@ -55,6 +62,18 @@ public class UserServiceImplTest {
     void setUp() {
         // Открываем мок для статических методов SecurityUtils перед каждым тестом
         mockedSecurityUtils = Mockito.mockStatic(SecurityUtils.class);
+
+        userValidator = new UserValidator(userRepository);
+
+        userSecurityChecker = new UserSecurityChecker(userRepository);
+
+        userService = new UserServiceImpl(
+                userRepository,
+                passwordEncoder,
+                jwtTokenProvider,
+                userValidator, // Используется реальный объект!
+                userSecurityChecker
+        );
     }
 
     @AfterEach
@@ -77,6 +96,7 @@ public class UserServiceImplTest {
         savedUser.setUsername(username);
         savedUser.setRole(UserRole.USER);
         savedUser.setStatus(UserStatus.ACTIVE);
+        savedUser.setTokenVersion(1);
 
         when(userRepository.findByUsername(username)).thenReturn(Optional.empty());
         when(passwordEncoder.encode(inputUserDto.getPassword())).thenReturn("encoded_hash");
@@ -108,11 +128,24 @@ public class UserServiceImplTest {
     }
 
     @Test
+    @DisplayName("Ошибка создания пользователя: пароль пользователя пустой")
+    void createEmptyPasswordTest() {
+        UserDto inputUserDto = new UserDto();
+        inputUserDto.setUsername("Roman");
+        inputUserDto.setPassword("");
+
+        assertThrows(ValidationException.class, () -> userService.create(inputUserDto));
+
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
     @DisplayName("Ошибка создания пользователя: имя пользователя уже занято")
     void createUsernameExistTest() {
         String username = "Roman";
         UserDto inputUserDto = new UserDto();
         inputUserDto.setUsername(username);
+        inputUserDto.setPassword("password");
 
         when(userRepository.findByUsername(username)).thenReturn(Optional.of(new User()));
 
@@ -299,7 +332,7 @@ public class UserServiceImplTest {
         StepVerifier.create(result)
                 .expectErrorMatches(
                         throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("Only ADMIN can change user roles.")
+                                     && throwable.getMessage().equals("You do not have permission to perform this action.")
                 ).verify();
 
         verify(userRepository, times(1)).findById(inputUserDto.getId());
@@ -647,7 +680,7 @@ public class UserServiceImplTest {
 
         when(userRepository.findByUsername(username)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("pass", "hash")).thenReturn(true);
-        when(jwtTokenProvider.createToken(1, username, "USER", "ACTIVE")).thenReturn(token);
+        when(jwtTokenProvider.createToken(1, username, "USER", "ACTIVE", 1)).thenReturn(token);
 
         Mono<AuthResponseDto> result = userService.login(authRequestDto);
 
@@ -657,7 +690,7 @@ public class UserServiceImplTest {
 
         verify(userRepository, times(1)).findByUsername(username);
         verify(jwtTokenProvider, times(1))
-                .createToken(1, username, "USER", "ACTIVE");
+                .createToken(1, username, "USER", "ACTIVE", 1);
     }
 
     @Test
@@ -678,8 +711,8 @@ public class UserServiceImplTest {
                 ).verify();
 
         verify(userRepository, times(1)).findByUsername(username);
-        verify(jwtTokenProvider, never())
-                .createToken(any(Integer.class), any(String.class),  any(String.class),  any(String.class));
+        verify(jwtTokenProvider, never()).createToken(
+                any(Integer.class), any(String.class), any(String.class), any(String.class), any(Integer.class));
     }
 
     @Test
@@ -706,8 +739,8 @@ public class UserServiceImplTest {
                 ).verify();
 
         verify(userRepository, times(1)).findByUsername(username);
-        verify(jwtTokenProvider, never())
-                .createToken(any(Integer.class), any(String.class),  any(String.class),  any(String.class));
+        verify(jwtTokenProvider, never()).
+                createToken(any(Integer.class), any(String.class), any(String.class), any(String.class), any(Integer.class));
     }
 
     @Test
@@ -731,13 +764,103 @@ public class UserServiceImplTest {
 
         StepVerifier.create(result)
                 .expectErrorMatches(
-                        throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("Invalid username or password")
+                        throwable -> throwable instanceof AccessDeniedException &&
+                                     throwable.getMessage().equals("Invalid username or password")
                 ).verify();
 
         verify(userRepository, times(1)).findByUsername(username);
         verify(passwordEncoder, times(1)).matches("pass", "hash");
-        verify(jwtTokenProvider, never())
-                .createToken(any(Integer.class), any(String.class),  any(String.class),  any(String.class));
+        verify(jwtTokenProvider, never()).createToken(
+                any(Integer.class), any(String.class), any(String.class), any(String.class), any(Integer.class));
+    }
+
+    @Test
+    @DisplayName("Пользователь успешно разлогируется")
+    void logoutSuccessTest() {
+        String username = "Roman";
+        int tokenVersion = 1;
+        User user = new User();
+        user.setId(1);
+        user.setUsername(username);
+        user.setPasswordHash("hash");
+        user.setStatus(UserStatus.ACTIVE);
+        user.setTokenVersion(tokenVersion);
+
+        UserPrincipal principal = new UserPrincipal(1, username, UserRole.USER);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+        when(userRepository.findByUsername(username)).thenReturn(Optional.of(user));
+        when(userRepository.save(any(User.class))).thenReturn(user);
+
+        Mono<Void> result = userService.logout();
+
+        StepVerifier.create(result).verifyComplete();
+
+        verify(userRepository, times(1)).findByUsername(username);
+        verify(userRepository, times(1)).save(
+                argThat(userDto ->
+                        userDto.getId().equals(user.getId()) &&
+                        userDto.getTokenVersion().equals(tokenVersion + 1)
+                )
+        );
+    }
+
+    @Test
+    @DisplayName("Ошибка разлогирования пользователя: Пользователь с таким именем не найден.")
+    void logoutUsernameNotFoundAccessDeniedTest() {
+        String username = "Roman";
+        UserPrincipal principal = new UserPrincipal(1, username, UserRole.USER);
+
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+        when(userRepository.findByUsername(username)).thenReturn(Optional.empty());
+
+        Mono<Void> result = userService.logout();
+
+        StepVerifier.create(result)
+                .expectErrorMatches(
+                        throwable -> throwable instanceof NotFoundException &&
+                                     throwable.getMessage().equals("User with username: "
+                                                                      + principal.getName() + " not found")
+                ).verify();
+
+        verify(userRepository, times(1)).findByUsername(username);
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    @DisplayName("Успешное получение информации безопасности пользователя")
+    void findSecurityInfoByUsernameSuccessTest() {
+        String username = "Roman";
+        UserSecurityInfo mockInfo = mock(UserSecurityInfo.class);
+
+        when(mockInfo.getStatus()).thenReturn(UserStatus.ACTIVE);
+        when(mockInfo.getTokenVersion()).thenReturn(1);
+        when(userRepository.findSecurityInfoByUserName(username)).thenReturn(Optional.of(mockInfo));
+
+        Mono<UserSecurityInfo> result = userService.findSecurityInfoByUsername(username);
+
+        StepVerifier.create(result)
+                .expectNextMatches(info -> info.getTokenVersion().equals(1) &&
+                                           info.getStatus().equals(UserStatus.ACTIVE))
+                .verifyComplete();
+
+        verify(userRepository, times(1)).findSecurityInfoByUserName(username);
+    }
+
+    @Test
+    @DisplayName("Ошибка: информация безопасности не найдена по имени пользователя")
+    void findSecurityInfoByUsernameNotFoundExceptionTest() {
+        String username = "Unknown";
+
+        when(userRepository.findSecurityInfoByUserName(username)).thenReturn(Optional.empty());
+
+        Mono<UserSecurityInfo> result = userService.findSecurityInfoByUsername(username);
+
+        StepVerifier.create(result)
+                .expectErrorMatches(
+                        throwable -> throwable instanceof NotFoundException &&
+                                     throwable.getMessage().equals("SecurityInfo not found with username: " + username)
+                ).verify();
+
+        verify(userRepository, times(1)).findSecurityInfoByUserName(username);
     }
 }

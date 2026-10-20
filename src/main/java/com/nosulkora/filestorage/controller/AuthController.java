@@ -34,4 +34,11 @@ public class AuthController {
     public Mono<AuthResponseDto> login(@RequestBody AuthRequestDto request) {
         return userService.login(request);
     }
+
+    @PostMapping("/logout")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "Logout user and invalidate all their tokens everywhere")
+    public Mono<Void> logout() {
+        return userService.logout();
+    }
 }

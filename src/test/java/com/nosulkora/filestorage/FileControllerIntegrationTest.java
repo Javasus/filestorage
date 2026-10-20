@@ -6,6 +6,7 @@ import com.nosulkora.filestorage.model.entity.File;
 import com.nosulkora.filestorage.model.enums.EventStatus;
 import com.nosulkora.filestorage.model.enums.FileStatus;
 import io.minio.StatObjectArgs;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
@@ -615,10 +616,6 @@ public class FileControllerIntegrationTest extends BaseIntegrationTest {
         boolean existInDb = fileRepository.findById(responseFileDto.getId()).isPresent();
         assertThat(existInDb).isTrue();
     }
-
-    // TODO
-    // 1. Написать тест где в сервис обращается пользователь у которого status = BLOCKED.
-
 
     // ------------------------- Вспомогательные методы -------------------------
 
