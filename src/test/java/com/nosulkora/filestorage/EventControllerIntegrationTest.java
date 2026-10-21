@@ -7,14 +7,15 @@ import com.nosulkora.filestorage.model.entity.Event;
 import com.nosulkora.filestorage.model.enums.EventStatus;
 import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.web.reactive.function.BodyInserters;
 
 import java.util.List;
 import java.util.Map;
@@ -23,7 +24,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class EventControllerIntegrationTest extends BaseIntegrationTest {
 
-    @Disabled
     @DisplayName("Успешное получение событий модератором и админом по ID и списком.")
     @Test
     void moderatorAndAdminAccessEventsSuccessTest() {
@@ -139,23 +139,91 @@ public class EventControllerIntegrationTest extends BaseIntegrationTest {
     }
 
 
-    @DisplayName("Отказ в доступе: Обычный USER пытается запросить историю событий.")
+    @DisplayName("Интеграционный тест: Разграничение прав доступа USER к событиям (свой/чужой файл)")
     @Test
     void regularUserAccessEventsForbiddenTest() {
-        // 1. Попытка получить конкретное событие по ID -> 403 Forbidden
+        // 1. USER_1 загружает свой файл (автоматический появляется событие)
+        ByteArrayResource resource1 = new ByteArrayResource("content1".getBytes()) {
+            @Override
+            public String getFilename() {
+                return "test1.txt";
+            }
+        };
+
+        FileDto fileResponse1 = clientWithAuth(user1Token).post()
+                .uri("/api/files")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(BodyInserters.fromMultipartData("file", resource1))
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody(FileDto.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertNotNull(fileResponse1);
+
+        // 2. USER_2 загружает свой файл (автоматический появляется событие)
+        ByteArrayResource resource2 = new ByteArrayResource("content2".getBytes()) {
+            @Override
+            public String getFilename() {
+                return "test2.txt";
+            }
+        };
+
+        FileDto fileResponse2 = clientWithAuth(user2Token).post()
+                .uri("/api/files")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(BodyInserters.fromMultipartData("file", resource2))
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody(FileDto.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertNotNull(fileResponse2);
+
+        // 3. USER_2 получает все события. Получает только одно своё событие.
+        List<EventDto> user2Events = clientWithAuth(user2Token).get()
+                .uri("/api/events")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBodyList(EventDto.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertAll(
+                "Проверяем что USER_2 получил только свой EVENT: ",
+                () -> assertNotNull(user2Events),
+                () -> assertFalse(user2Events.isEmpty()),
+                () -> assertEquals(1, user2Events.size()),
+                () -> assertEquals(regularUser2.getId(), user2Events.get(0).getUserId())
+        );
+
+        Integer user2EventId = user2Events.get(0).getId();
+
+        // 4. USER_1 пытается получить чужой EVENT по ID -> 403 Forbidden
         clientWithAuth(user1Token).get()
-                .uri("/api/events/1")
+                .uri("/api/events/" + user2EventId)
                 .exchange()
                 .expectStatus().isForbidden() // Жёсткий отказ безопасности
                 .expectBody()
-                .jsonPath("$.message").isEqualTo("Only MODERATOR or ADMIN can manage events");
+                .jsonPath("$.message").isEqualTo("You do not have permission to view this event");
 
-        // 2. Попытка получить список всех событий системы -> 403 Forbidden
-        clientWithAuth(user1Token).get()
+        // 5. USER_1 пытается получить список всех EVENT -> получает только свой.
+        List<EventDto> user1Events = clientWithAuth(user1Token).get()
                 .uri("/api/events")
                 .exchange()
-                .expectStatus().isForbidden()
-                .expectBody()
-                .jsonPath("$.message").isEqualTo("Only MODERATOR or ADMIN can manage events");
+                .expectStatus().isOk()
+                .expectBodyList(EventDto.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertAll(
+                "Проверяем что USER_1 получил только свой EVENT: ",
+                () -> assertNotNull(user1Events),
+                () -> assertFalse(user1Events.isEmpty()),
+                () -> assertEquals(1, user1Events.size()),
+                () -> assertEquals(regularUser1.getId(), user1Events.get(0).getUserId())
+        );
     }
 }

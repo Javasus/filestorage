@@ -29,10 +29,9 @@ public class FileController {
     @Operation(summary = "Upload a file to S3 storage")
     public Mono<FileDto> create(@RequestPart("file") Mono<Part> filePartMono) {
         return filePartMono.flatMap(part -> {
-            if (!(part instanceof FilePart)) {
+            if (!(part instanceof FilePart filePart)) {
                 return Mono.error(new ValidationException("File name cannot be empty"));
             }
-            FilePart filePart = (FilePart) part;
 
             if (filePart.filename().trim().isEmpty()) {
                 return Mono.error(new ValidationException("File name cannot be empty"));

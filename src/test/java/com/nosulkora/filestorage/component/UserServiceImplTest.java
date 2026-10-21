@@ -63,7 +63,7 @@ public class UserServiceImplTest {
         // Открываем мок для статических методов SecurityUtils перед каждым тестом
         mockedSecurityUtils = Mockito.mockStatic(SecurityUtils.class);
 
-        userValidator = new UserValidator(userRepository);
+        userValidator = new UserValidator();
 
         userSecurityChecker = new UserSecurityChecker(userRepository);
 
@@ -162,10 +162,9 @@ public class UserServiceImplTest {
     }
 
     @Test
-    @DisplayName("Успешное обновление пользователем своего профиля - USER")
-    void updateUserSuccessTest() {
+    @DisplayName("Ошибка обновления: обычный USER получает отказ при попытке обновить профиль")
+    void updateUserAccessDeniedForUserTest() {
         String newUsername = "new_name";
-        String oldUsername = "old_name";
         UserDto inputUserDto = new UserDto();
         inputUserDto.setId(1);
         inputUserDto.setUsername(newUsername);
@@ -173,23 +172,17 @@ public class UserServiceImplTest {
         UserPrincipal principal = new UserPrincipal(1, "oldUsername", UserRole.USER);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
-        User updatedUser = new User();
-        updatedUser.setId(1);
-        updatedUser.setUsername(oldUsername);
-        updatedUser.setRole(UserRole.USER);
-        updatedUser.setStatus(UserStatus.ACTIVE);
-
-        when(userRepository.findById(inputUserDto.getId())).thenReturn(Optional.of(updatedUser));
-        when(userRepository.save(any(User.class))).thenReturn(updatedUser);
-
         Mono<UserDto> result = userService.update(inputUserDto);
 
         StepVerifier.create(result)
-                .expectNextMatches(dto -> dto.getUsername().equals(newUsername))
-                .verifyComplete();
+                .expectErrorMatches(
+                        throwable -> throwable instanceof AccessDeniedException
+                                     && throwable.getMessage()
+                                             .equals("You do not have permission to perform this action.")
+                ).verify();
 
-        verify(userRepository, times(1)).findById(inputUserDto.getId());
-        verify(userRepository, times(1)).save(any(User.class));
+        verify(userRepository, never()).findById(any());
+        verify(userRepository, never()).save(any());
     }
 
     @Test
@@ -316,16 +309,8 @@ public class UserServiceImplTest {
         inputUserDto.setUsername(username);
         inputUserDto.setRole(UserRole.ADMIN);
 
-        User userFromDb = new User();
-        userFromDb.setId(userId);
-        userFromDb.setUsername(username);
-        userFromDb.setRole(UserRole.USER);
-        userFromDb.setStatus(UserStatus.ACTIVE);
-
         UserPrincipal principal = new UserPrincipal(userId, username, UserRole.USER);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
-
-        when(userRepository.findById(1)).thenReturn(Optional.of(userFromDb));
 
         Mono<UserDto> result = userService.update(inputUserDto);
 
@@ -335,40 +320,30 @@ public class UserServiceImplTest {
                                      && throwable.getMessage().equals("You do not have permission to perform this action.")
                 ).verify();
 
-        verify(userRepository, times(1)).findById(inputUserDto.getId());
         verify(userRepository, never()).save(any(User.class));
     }
 
     @Test
-    @DisplayName("Пользователь с ролью USER успешно удаляет себя. Положительный.")
+    @DisplayName("Ошибка удаления: обычный USER получает отказ при попытке обновить профиль" +
+                 "Пользователь с ролью USER успешно удаляет себя. Положительный.")
     void deleteHimselfUserSuccessTest() {
         Integer userId = 1;
         String username = "username";
 
-        User deletedUser = new User();
-        deletedUser.setId(userId);
-        deletedUser.setStatus(UserStatus.ACTIVE);
-        deletedUser.setUsername(username);
-        deletedUser.setRole(UserRole.USER);
-
         UserPrincipal principal = new UserPrincipal(1, username, UserRole.USER);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
-        when(userRepository.findById(userId)).thenReturn(Optional.of(deletedUser));
-        when(userRepository.save(any(User.class))).thenReturn(deletedUser);
-
         Mono<Void> result = userService.delete(userId);
 
-        StepVerifier.create(result).verifyComplete();
+        StepVerifier.create(result)
+                .expectErrorMatches(
+                        throwable -> throwable instanceof AccessDeniedException
+                                     && throwable.getMessage()
+                                             .equals("You do not have permission to perform this action.")
+                ).verify();
 
-        verify(userRepository, times(1)).findById(userId);
-        verify(userRepository, times(1)).save(
-                argThat(userDto ->
-                        userDto.getId().equals(principal.getId()) &&
-                        userDto.getStatus().equals(UserStatus.BLOCKED) &&
-                        userDto.getUsername().equals(username)
-                )
-        );
+        verify(userRepository,never()).findById(userId);
+        verify(userRepository, never()).save(any(User.class));
         verify(userRepository, never()).deleteById(userId);
     }
 

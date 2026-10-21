@@ -78,8 +78,7 @@ public class UserServiceImpl implements UserService {
         userValidator.validateUsername(userDto.getUsername());
         return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> {
-                    boolean isOwner = isOwner(currentUser, userDto.getId());
-                    return userSecurityChecker.validateResourceAccess(currentUser, isOwner, List.of(UserRole.ADMIN))
+                    return userSecurityChecker.validateResourceAccess(currentUser, false, List.of(UserRole.ADMIN))
                             .then(userSecurityChecker.getTargetUserIfExist(userDto.getId()))
                             .flatMap(targetUser -> userSecurityChecker.validateAccountStatusForActions(currentUser, targetUser))
                             .flatMap(targetUser -> userSecurityChecker.changeUserRoleAndFields(userDto, targetUser, currentUser))
@@ -93,14 +92,14 @@ public class UserServiceImpl implements UserService {
     public Mono<Void> delete(Integer userId) {
         return SecurityUtils.getCurrentUser()
                 .flatMap(currentUser -> {
-                    boolean isOwner = isOwner(currentUser, userId);
-                    return userSecurityChecker.validateResourceAccess(currentUser, isOwner, List.of(UserRole.ADMIN))
+                    return userSecurityChecker.validateResourceAccess(currentUser, false, List.of(UserRole.ADMIN))
                             .then(userSecurityChecker.getTargetUserIfExist(userId))
                             .flatMap(targetUser -> {
                                 if (userSecurityChecker.isAccountBlocked(targetUser)) {
                                     return Mono.empty();
                                 }
                                 targetUser.setStatus(UserStatus.BLOCKED);
+                                targetUser.setTokenVersion(targetUser.getTokenVersion() + 1);
                                 return saveUserEntity(targetUser)
                                         .doOnSuccess(savedUser -> LOGGER.info(
                                                 "User profile softly deleted (BLOCKED): {} with ID: {}",
