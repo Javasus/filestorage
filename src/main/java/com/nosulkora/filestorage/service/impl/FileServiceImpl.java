@@ -1,20 +1,20 @@
 package com.nosulkora.filestorage.service.impl;
 
-import com.nosulkora.filestorage.exception.AccessDeniedException;
 import com.nosulkora.filestorage.exception.NotFoundException;
 import com.nosulkora.filestorage.exception.ValidationException;
 import com.nosulkora.filestorage.mapper.FileMapper;
-import com.nosulkora.filestorage.model.dto.EventDto;
 import com.nosulkora.filestorage.model.dto.FileDto;
+import com.nosulkora.filestorage.model.entity.Event;
 import com.nosulkora.filestorage.model.entity.File;
 import com.nosulkora.filestorage.model.entity.User;
 import com.nosulkora.filestorage.model.enums.EventStatus;
 import com.nosulkora.filestorage.model.enums.FileStatus;
 import com.nosulkora.filestorage.model.enums.UserRole;
+import com.nosulkora.filestorage.repository.EventRepository;
 import com.nosulkora.filestorage.repository.FileRepository;
 import com.nosulkora.filestorage.security.SecurityUtils;
 import com.nosulkora.filestorage.security.UserPrincipal;
-import com.nosulkora.filestorage.service.EventService;
+import com.nosulkora.filestorage.service.FileSecurityChecker;
 import com.nosulkora.filestorage.service.FileService;
 import com.nosulkora.filestorage.service.StorageService;
 import com.nosulkora.filestorage.utils.ReactiveWrapper;
@@ -22,8 +22,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.time.LocalDateTime;
 
 @Service
 public class FileServiceImpl implements FileService {
@@ -31,17 +34,20 @@ public class FileServiceImpl implements FileService {
     private static final Logger LOGGER = LoggerFactory.getLogger(FileServiceImpl.class);
 
     private final FileRepository fileRepository;
-    private final EventService eventService;
     private final StorageService storageService;
+    private final FileSecurityChecker fileSecurityChecker;
+    private final EventRepository eventRepository;
 
     public FileServiceImpl(
             FileRepository fileRepository,
-            EventService eventService,
-            StorageService storageService
+            StorageService storageService,
+            FileSecurityChecker fileSecurityChecker,
+            EventRepository eventRepository
     ) {
         this.fileRepository = fileRepository;
-        this.eventService = eventService;
         this.storageService = storageService;
+        this.fileSecurityChecker = fileSecurityChecker;
+        this.eventRepository = eventRepository;
     }
 
     @Override
@@ -61,11 +67,19 @@ public class FileServiceImpl implements FileService {
                                 file.setLocation(fileUrl); // Записываем URL in S3
                                 file.setStatus(FileStatus.ACTIVE);
 
-                                // 3. Сохраняем в БД и регистрируем Event
-                                return saveFile(file)
-                                        .flatMap(savedFile ->
-                                                createEvent(principal.getId(), savedFile.getId(), EventStatus.CREATED)
-                                                        .thenReturn(FileMapper.toDto(savedFile)));
+                                // 3. Сохраняем файл и регистрируем Event в рамках одной транзакции
+                                return ReactiveWrapper.<File>mono(() -> saveFileAndEventInTransaction(
+                                                file,
+                                                EventStatus.CREATED,
+                                                principal))
+                                        .map(FileMapper::toDto)
+                                        // В случае ошибки сохранения файла или события, удаляем файл из MinIO
+                                        .onErrorResume(databaseException -> {
+                                            LOGGER.error("Database commit failed! Initiating S3 rollback. " +
+                                                         "Deleting file from MinIO: {}", fileUrl);
+                                            return storageService.deleteFile(fileUrl)
+                                                    .then(Mono.error(databaseException));
+                                        });
                             });
                 });
     }
@@ -78,13 +92,14 @@ public class FileServiceImpl implements FileService {
                     validateFilename(fileDto.getName());
                     // Проверяем существует ли файл в БД
                     return getFileIfExist(fileDto.getId())
-                            .flatMap(existingFile -> checkFileAccess(existingFile, principal))
+                            .flatMap(existingFile -> fileSecurityChecker.checkWriteAccess(existingFile, principal))
                             .flatMap(existingFile -> {
                                 existingFile.setName(fileDto.getName());
-                                return saveFile(existingFile)
-                                        .flatMap(updatedFile ->
-                                                createEvent(principal.getId(), updatedFile.getId(), EventStatus.UPDATED)
-                                                        .thenReturn(FileMapper.toDto(updatedFile)));
+                                return ReactiveWrapper.mono(() -> saveFileAndEventInTransaction(
+                                                existingFile,
+                                                EventStatus.UPDATED,
+                                                principal))
+                                        .map(file -> FileMapper.toDto((File) file));
                             });
                 });
     }
@@ -97,14 +112,14 @@ public class FileServiceImpl implements FileService {
 
                     // 1. Находим файл для получения его Location URL и проверки прав
                     return getFileIfExist(fileId)
-                            .flatMap(file -> checkFileAccess(file, principal))
+                            .flatMap(file -> fileSecurityChecker.checkWriteAccess(file, principal))
                             .flatMap(existingFile -> {
                                 // 2. Меняем статус у файла и обновляем его в БД
                                 existingFile.setStatus(FileStatus.ARCHIVED);
-                                return saveFile(existingFile)
-                                        // 3. Создаём event об удалении
-                                        .flatMap(updatedFile ->
-                                                createEvent(principal.getId(), fileId, EventStatus.DELETED))
+                                return ReactiveWrapper.mono(() -> saveFileAndEventInTransaction(
+                                                existingFile,
+                                                EventStatus.DELETED,
+                                                principal))
                                         .then();
                             });
                 });
@@ -116,7 +131,7 @@ public class FileServiceImpl implements FileService {
                 .flatMap(principal -> {
                     validateFileId(fileId);
                     return getFileIfExist(fileId)
-                            .flatMap(file -> checkFileAccess(file, principal))
+                            .flatMap(file -> fileSecurityChecker.checkReadAccess(file, principal))
                             .map(file -> FileMapper.toDto((File) file));
                 });
     }
@@ -137,22 +152,38 @@ public class FileServiceImpl implements FileService {
                 });
     }
 
-    // --- Вспомогательный методы ---
+    // --------------------------------------- Вспомогательные методы --------------------------------------------------
 
     /**
-     * Проверка прав пользователя.
+     * Сохранение файла и создание событие в рамках одной транзакции СУБД.
      *
-     * @param file          Файл над которым совершается действие.
-     * @param userPrincipal Пользователь, который совершает изменения.
-     * @return Файл над которым совершается действие.
+     * @param file        файл который нужно сохранить в БД.
+     * @param eventStatus Статус события.
+     * @return сохраненный файл.
      */
-    private Mono<File> checkFileAccess(File file, UserPrincipal userPrincipal) {
-        // Если роль USER, проверяем совпадение userId
-        if (userPrincipal.getRole().equals(UserRole.USER) && !userPrincipal.getId().equals(file.getUser().getId())) {
-            return Mono.error(new AccessDeniedException("You do not have permission to work with this file."));
-        }
-        // ADMIN и MODERATOR проходят проверку автоматически
-        return Mono.just(file);
+    @Transactional
+    public File saveFileAndEventInTransaction(File file, EventStatus eventStatus, UserPrincipal principal) {
+        // 1. Сохраняем файл
+        File savedFile = fileRepository.save(file);
+        LOGGER.info("File entity committed to DB with ID: {}", savedFile.getId());
+
+        // 2. Создаем промежуточного пользователя для указания его в событии, что бы видеть того кто изменяет файл.
+        User userProxy = new User();
+        userProxy.setId(principal.getId());
+        userProxy.setRole(principal.getRole());
+        userProxy.setUsername(principal.getName());
+
+        // 2. Создаём и сохраняем связанное событие
+        Event event = new Event();
+        event.setUser(userProxy);
+        event.setFile(savedFile);
+        event.setStatus(eventStatus);
+        event.setTimeStamp(LocalDateTime.now());
+
+        eventRepository.save(event);
+        LOGGER.info("Event log [{}] committed to DB for file ID: {}", eventStatus, savedFile.getId());
+
+        return savedFile;
     }
 
     private void validateFileId(Integer id) {
@@ -167,30 +198,6 @@ public class FileServiceImpl implements FileService {
             LOGGER.error("File name cannot be empty");
             throw new ValidationException("File name cannot be empty");
         }
-    }
-
-    /**
-     * Сохраняет файл, и создает и сохраняет событие.
-     *
-     * @param file файл который нужно сохранить в БД.
-     * @return сохраненный файл.
-     */
-    private Mono<File> saveFile(File file) {
-        return ReactiveWrapper.mono(() -> {
-            File savedFile = fileRepository.save(file);
-            LOGGER.info("File saved successfully with ID: {}", savedFile.getId());
-            return savedFile;
-        });
-    }
-
-    private Mono<Void> createEvent(Integer userId, Integer fileId, EventStatus eventStatus) {
-        EventDto eventDto = new EventDto();
-        eventDto.setUserId(userId);
-        eventDto.setFileId(fileId);
-        eventDto.setStatus(eventStatus);
-        return eventService.create(eventDto)
-                .doOnSuccess(v -> LOGGER.info("Event {} create for file ID: {}", eventStatus, fileId))
-                .then();
     }
 
     private Mono<File> getFileIfExist(Integer fileId) {

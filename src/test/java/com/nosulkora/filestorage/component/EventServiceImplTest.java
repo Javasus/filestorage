@@ -126,9 +126,138 @@ public class EventServiceImplTest {
         verify(eventRepository, never()).save(any(Event.class));
     }
 
+    // ----------------------------------------------------- USER ------------------------------------------------------
+
+    @Test
+    @DisplayName("Ошибка обновления события: у роли USER нет доступа")
+    void updateUserAccessDeniedTest() {
+        EventDto eventDto = new EventDto();
+        eventDto.setId(100);
+        eventDto.setStatus(EventStatus.UPDATED);
+
+        UserPrincipal principal = new UserPrincipal(1, "simpleUser", UserRole.USER);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        Mono<EventDto> result = eventService.update(eventDto);
+
+        StepVerifier.create(result)
+                .expectErrorMatches(
+                        throwable -> throwable instanceof AccessDeniedException
+                                     && throwable.getMessage().equals("Only MODERATOR or ADMIN can manage events")
+                ).verify();
+
+        verify(eventRepository, never()).findById(any(Integer.class));
+        verify(eventRepository, never()).save(any(Event.class));
+    }
+
+    @Test
+    @DisplayName("Ошибка удаления события: у роли USER нет доступа")
+    void deleteUserAccessDeniedTest() {
+        Integer eventId = 50;
+        UserPrincipal principal = new UserPrincipal(1, "simpleUser", UserRole.USER);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        Mono<Void> result = eventService.delete(eventId);
+
+        StepVerifier.create(result)
+                .expectErrorMatches(
+                        throwable -> throwable instanceof AccessDeniedException
+                                     && throwable.getMessage().equals("Only MODERATOR or ADMIN can manage events")
+                ).verify();
+
+        verify(eventRepository, never()).findById(eventId);
+        verify(eventRepository, never()).deleteById(eventId);
+    }
+
+    @Test
+    @DisplayName("Ошибка получение события по ID: USER пытается прочесть чужое событие")
+    void findByIdUserAccessDeniedUserTest() {
+        Integer eventId = 100;
+
+        User mockUser = new User();
+        mockUser.setId(5);
+
+        Event event = new Event();
+        event.setId(eventId);
+        event.setUser(mockUser);
+
+        UserPrincipal principal = new UserPrincipal(1, "user", UserRole.USER);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        Mono<EventDto> result = eventService.findById(eventId);
+
+        StepVerifier.create(result)
+                .expectErrorMatches(
+                        throwable -> throwable instanceof AccessDeniedException
+                                     && throwable.getMessage().equals("You do not have permission to view this event")
+                ).verify();
+
+        verify(eventRepository, times(1)).findById(eventId);
+    }
+
+    @Test
+    @DisplayName("Получение события по ID: USER успешно получает своё событие")
+    void findByIdUserSuccessTest() {
+        Integer eventId = 100;
+        Integer userId = 5;
+
+        User mockUser = new User();
+        mockUser.setId(userId);
+
+        Event event = new Event();
+        event.setId(eventId);
+        event.setUser(mockUser);
+
+        UserPrincipal principal = new UserPrincipal(userId, "user", UserRole.USER);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        Mono<EventDto> result = eventService.findById(eventId);
+
+        StepVerifier.create(result)
+                .expectNextMatches((dto -> dto.getId().equals(eventId)))
+                .verifyComplete();
+
+        verify(eventRepository, times(1)).findById(eventId);
+    }
+
+    @Test
+    @DisplayName("Получение всех событий: USER успешно получает список только своих событий")
+    void findAllUserAccessDeniedTest() {
+        Integer eventId = 10;
+        Integer userId = 5;
+
+        User mockUser = new User();
+        mockUser.setId(userId);
+
+        Event event = new Event();
+        event.setId(eventId);
+        event.setUser(mockUser);
+        event.setFile(new File());
+
+        UserPrincipal principal = new UserPrincipal(userId, "user", UserRole.USER);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(eventRepository.findByUserId(userId)).thenReturn(List.of(event));
+
+        Flux<EventDto> result = eventService.findAll();
+
+        StepVerifier.create(result)
+                .expectNextMatches((dto -> dto.getId().equals(eventId)))
+                .verifyComplete();
+
+        verify(eventRepository, times(1)).findByUserId(userId);
+        verify(eventRepository, never()).findAll();
+    }
+
+    // ----------------------------------------------------- ADMIN -----------------------------------------------------
+
     @Test
     @DisplayName("Успешное обновление события пользователем с ролью ADMIN")
-    void updateSuccessAdminTest() {
+    void updateAdminSuccessTest() {
         Integer eventId = 100;
         EventDto eventDto = new EventDto();
         eventDto.setId(eventId);
@@ -163,30 +292,8 @@ public class EventServiceImplTest {
     }
 
     @Test
-    @DisplayName("Ошибка обновления события: у роли USER нет доступа")
-    void updateAccessDeniedUserTest() {
-        EventDto eventDto = new EventDto();
-        eventDto.setId(100);
-        eventDto.setStatus(EventStatus.UPDATED);
-
-        UserPrincipal principal = new UserPrincipal(1, "simpleUser", UserRole.USER);
-        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
-
-        Mono<EventDto> result = eventService.update(eventDto);
-
-        StepVerifier.create(result)
-                .expectErrorMatches(
-                        throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("Only MODERATOR or ADMIN can manage events")
-                ).verify();
-
-        verify(eventRepository, never()).findById(any(Integer.class));
-        verify(eventRepository, never()).save(any(Event.class));
-    }
-
-    @Test
     @DisplayName("Успешное удаление события админом")
-    void deleteSuccessAdminTest() {
+    void deleteAdminSuccessTest() {
         Integer eventId = 50;
         UserPrincipal principal = new UserPrincipal(1, "adminUser", UserRole.ADMIN);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
@@ -206,28 +313,8 @@ public class EventServiceImplTest {
     }
 
     @Test
-    @DisplayName("Ошибка удаления события: у роли USER нет доступа")
-    void deleteAccessDeniedUserTest() {
-        Integer eventId = 50;
-        UserPrincipal principal = new UserPrincipal(1, "simpleUser", UserRole.USER);
-        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
-
-        Mono<Void> result = eventService.delete(eventId);
-
-        StepVerifier.create(result)
-                .expectErrorMatches(
-                        throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("Only MODERATOR or ADMIN can manage events")
-                ).verify();
-
-        verify(eventRepository, never()).findById(eventId);
-        verify(eventRepository, never()).deleteById(eventId);
-    }
-
-
-    @Test
-    @DisplayName("Ошибка удаления события: событие не найдено в БД")
-    void deleteNotFoundEventTest() {
+    @DisplayName("Ошибка удаления события ADMIN: событие не найдено в БД")
+    void deleteAdminNotFoundEventTest() {
         Integer eventId = 50;
         UserPrincipal principal = new UserPrincipal(1, "adminUser", UserRole.ADMIN);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
@@ -248,7 +335,7 @@ public class EventServiceImplTest {
 
     @Test
     @DisplayName("Получение события по ID админом")
-    void findByIdSuccessTest() {
+    void findByIdAdminSuccessTest() {
         Integer eventId = 100;
         Event event = new Event();
         event.setId(eventId);
@@ -268,26 +355,8 @@ public class EventServiceImplTest {
     }
 
     @Test
-    @DisplayName("Ошибка получение события по ID: у роли USER нет доступа")
-    void findByIdAccessDeniedUserTest() {
-        Integer eventId = 100;
-        UserPrincipal principal = new UserPrincipal(1, "simpleUser", UserRole.USER);
-        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
-
-        Mono<EventDto> result = eventService.findById(eventId);
-
-        StepVerifier.create(result)
-                .expectErrorMatches(
-                        throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("Only MODERATOR or ADMIN can manage events")
-                ).verify();
-
-        verify(eventRepository, never()).findById(eventId);
-    }
-
-    @Test
-    @DisplayName("Ошибка получение события по ID: событие не найдено в БД")
-    void findByIdNotFoundEventTest() {
+    @DisplayName("Ошибка получение события по ID ADMIN: событие не найдено в БД")
+    void findByIdAdminNotFoundEventTest() {
         Integer eventId = 100;
         UserPrincipal principal = new UserPrincipal(1, "adminUser", UserRole.ADMIN);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
@@ -306,8 +375,116 @@ public class EventServiceImplTest {
     }
 
     @Test
+    @DisplayName("Получение админом всем событий")
+    void findAllAdminSuccessTest() {
+        Event event1 = new Event();
+        event1.setId(1);
+        event1.setFile(new File());
+        event1.setUser(new User());
+
+        Event event2 = new Event();
+        event2.setId(2);
+        event2.setFile(new File());
+        event2.setUser(new User());
+
+        UserPrincipal principal = new UserPrincipal(1, "adminUser", UserRole.ADMIN);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(eventRepository.findAll()).thenReturn(List.of(event1, event2));
+
+        Flux<EventDto> result = eventService.findAll();
+
+        StepVerifier.create(result)
+                .expectNextMatches(dto -> dto.getId().equals(1))
+                .expectNextMatches(dto -> dto.getId().equals(2))
+                .verifyComplete();
+
+        verify(eventRepository, times(1)).findAll();
+    }
+
+    // --------------------------------------------------- MODERATOR ---------------------------------------------------
+
+    @Test
+    @DisplayName("Успешное обновление события пользователем с ролью MODERATOR")
+    void updateModeratorSuccessTest() {
+        Integer eventId = 100;
+        EventDto eventDto = new EventDto();
+        eventDto.setId(eventId);
+        eventDto.setStatus(EventStatus.UPDATED);
+
+        UserPrincipal principal = new UserPrincipal(1, "moderator", UserRole.MODERATOR);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        User mockUser = new User();
+        mockUser.setId(1);
+        File mockFile = new File();
+        mockFile.setId(eventId);
+
+        Event existingEvent = new Event();
+        existingEvent.setId(eventId);
+        existingEvent.setStatus(EventStatus.CREATED);
+        existingEvent.setUser(mockUser);
+        existingEvent.setFile(mockFile);
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(existingEvent));
+        when(eventRepository.save(any(Event.class))).thenReturn(existingEvent);
+
+        Mono<EventDto> result = eventService.update(eventDto);
+
+        StepVerifier.create(result)
+                .expectNextMatches(dto -> dto.getId().equals(eventId)
+                                          && dto.getStatus() == EventStatus.UPDATED)
+                .verifyComplete();
+
+        verify(eventRepository, times(1)).findById(eventId);
+        verify(eventRepository, times(1)).save(any(Event.class));
+    }
+
+    @Test
+    @DisplayName("Успешное удаление события MODERATOR")
+    void deleteModeratorSuccessTest() {
+        Integer eventId = 50;
+        UserPrincipal principal = new UserPrincipal(1, "moderator", UserRole.MODERATOR);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        Event existingEvent = new Event();
+        existingEvent.setId(eventId);
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(existingEvent));
+        doNothing().when(eventRepository).deleteById(eventId);
+
+        Mono<Void> result = eventService.delete(eventId);
+
+        StepVerifier.create(result).verifyComplete();
+
+        verify(eventRepository, times(1)).findById(eventId);
+        verify(eventRepository, times(1)).deleteById(eventId);
+    }
+
+    @Test
+    @DisplayName("Ошибка удаления события MODERATOR: событие не найдено в БД")
+    void deleteModeratorNotFoundEventTest() {
+        Integer eventId = 50;
+        UserPrincipal principal = new UserPrincipal(1, "moderator", UserRole.MODERATOR);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.empty());
+
+        Mono<Void> result = eventService.delete(eventId);
+
+        StepVerifier.create(result)
+                .expectErrorMatches(
+                        throwable -> throwable instanceof NotFoundException
+                                     && throwable.getMessage().equals("Event not found by ID: " + eventId)
+                ).verify();
+
+        verify(eventRepository, times(1)).findById(eventId);
+        verify(eventRepository, never()).deleteById(eventId);
+    }
+
+    @Test
     @DisplayName("Получение всех Модератором")
-    void findAllSuccessTest() {
+    void findAllModeratorSuccessTest() {
         UserPrincipal principal = new UserPrincipal(1, "moderatorUser", UserRole.MODERATOR);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
@@ -334,19 +511,49 @@ public class EventServiceImplTest {
     }
 
     @Test
-    @DisplayName("Ошибка получение всех событий: у роли USER нет доступа")
-    void findAllAccessDeniedUserTest() {
-        UserPrincipal principal = new UserPrincipal(1, "simpleUser", UserRole.USER);
+    @DisplayName("Получение события по ID MODERATOR")
+    void findByIdModeratorSuccessTest() {
+        Integer eventId = 100;
+
+        User mockUser = new User();
+        mockUser.setId(5);
+
+        Event event = new Event();
+        event.setId(eventId);
+        event.setUser(mockUser);
+        event.setFile(new File());
+
+        UserPrincipal principal = new UserPrincipal(1, "moderator", UserRole.MODERATOR);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
-        Flux<EventDto> result = eventService.findAll();
+        when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+        Mono<EventDto> result = eventService.findById(eventId);
+
+        StepVerifier.create(result)
+                .expectNextMatches(dto -> dto.getId().equals(eventId))
+                .verifyComplete();
+
+        verify(eventRepository, times(1)).findById(eventId);
+    }
+
+    @Test
+    @DisplayName("Ошибка получение события по ID MODERATOR: событие не найдено в БД")
+    void findByIdModeratorNotFoundEventTest() {
+        Integer eventId = 100;
+        UserPrincipal principal = new UserPrincipal(1, "moderator", UserRole.MODERATOR);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(eventRepository.findById(eventId)).thenReturn(Optional.empty());
+
+        Mono<EventDto> result = eventService.findById(eventId);
 
         StepVerifier.create(result)
                 .expectErrorMatches(
-                        throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("Only MODERATOR or ADMIN can manage events")
+                        throwable -> throwable instanceof NotFoundException
+                                     && throwable.getMessage().equals("Event not found by ID: " + eventId)
                 ).verify();
 
-        verify(eventRepository, never()).findAll();
+        verify(eventRepository, times(1)).findById(eventId);
     }
 }

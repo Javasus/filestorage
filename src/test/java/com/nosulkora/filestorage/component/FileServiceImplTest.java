@@ -3,17 +3,18 @@ package com.nosulkora.filestorage.component;
 import com.nosulkora.filestorage.exception.AccessDeniedException;
 import com.nosulkora.filestorage.exception.NotFoundException;
 import com.nosulkora.filestorage.exception.ValidationException;
-import com.nosulkora.filestorage.model.dto.EventDto;
 import com.nosulkora.filestorage.model.dto.FileDto;
+import com.nosulkora.filestorage.model.entity.Event;
 import com.nosulkora.filestorage.model.entity.File;
 import com.nosulkora.filestorage.model.entity.User;
 import com.nosulkora.filestorage.model.enums.EventStatus;
 import com.nosulkora.filestorage.model.enums.FileStatus;
 import com.nosulkora.filestorage.model.enums.UserRole;
+import com.nosulkora.filestorage.repository.EventRepository;
 import com.nosulkora.filestorage.repository.FileRepository;
 import com.nosulkora.filestorage.security.SecurityUtils;
 import com.nosulkora.filestorage.security.UserPrincipal;
-import com.nosulkora.filestorage.service.EventService;
+import com.nosulkora.filestorage.service.FileSecurityChecker;
 import com.nosulkora.filestorage.service.StorageService;
 import com.nosulkora.filestorage.service.impl.FileServiceImpl;
 import org.junit.jupiter.api.AfterEach;
@@ -44,10 +45,13 @@ public class FileServiceImplTest {
     private FileRepository fileRepository;
 
     @Mock
-    private EventService eventService;
+    private EventRepository eventRepository;
 
     @Mock
     private StorageService storageService;
+
+    @Mock
+    private FileSecurityChecker fileSecurityChecker;
 
     @InjectMocks
     private FileServiceImpl fileService;
@@ -87,9 +91,15 @@ public class FileServiceImplTest {
         userProxy.setId(1);
         file.setUser(userProxy);
 
+        Event mockEvent = new Event();
+        mockEvent.setId(123);
+        mockEvent.setUser(userProxy);
+        mockEvent.setFile(file);
+        mockEvent.setStatus(EventStatus.CREATED);
+
         when(storageService.uploadFile(filePart)).thenReturn(Mono.just(expectedS3Url));
         when(fileRepository.save(any(File.class))).thenReturn(file);
-        when(eventService.create(any(EventDto.class))).thenReturn(Mono.just(new EventDto()));
+        when(eventRepository.save(any(Event.class))).thenReturn(mockEvent);
 
         Mono<FileDto> result = fileService.create(fileDto, filePart);
 
@@ -101,11 +111,11 @@ public class FileServiceImplTest {
 
         verify(storageService, times(1)).uploadFile(filePart);
         verify(fileRepository, times(1)).save(any(File.class));
-        verify(eventService, times(1)).create(
-                argThat(eventDto ->
-                        eventDto.getStatus().equals(EventStatus.CREATED) &&
-                        eventDto.getFileId().equals(100) &&
-                        eventDto.getUserId().equals(1)
+        verify(eventRepository, times(1)).save(
+                argThat(event ->
+                        event.getStatus().equals(EventStatus.CREATED) &&
+                        event.getFile().getId().equals(100) &&
+                        event.getUser().getId().equals(1)
                 )
         );
     }
@@ -130,14 +140,45 @@ public class FileServiceImplTest {
 
         verify(storageService, never()).uploadFile(filePart);
         verify(fileRepository, never()).save(any(File.class));
-        verify(eventService, never()).create(any(EventDto.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
-    @DisplayName("Успешное изменение файла. " +
-                 "1. Название файла в БД меняется." +
-                 "2. Путь до файла и статус не меняются.")
-    void updateFileSuccessTest() {
+    @DisplayName("Ошибка создания файла: сбой СУБД активирует компенсационное удаление из MinIO")
+    void createFileTransactionDbErrorTest() {
+        FileDto fileDto = new FileDto();
+        fileDto.setName("test-file.txt");
+        String uploadedS3Url = "http://minio/bucket/zombi-file.txt";
+        String errorMessage = "Database Connection Timeout!";
+
+        FilePart filePart = mock(FilePart.class);
+        UserPrincipal principal = new UserPrincipal(1, "username", UserRole.USER);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(storageService.uploadFile(filePart)).thenReturn(Mono.just(uploadedS3Url));
+        when(fileRepository.save(any(File.class))).
+                thenThrow(new RuntimeException(errorMessage));
+        when(storageService.deleteFile(uploadedS3Url)).thenReturn(Mono.empty());
+
+        Mono<FileDto> result = fileService.create(fileDto, filePart);
+
+        StepVerifier.create(result)
+                .expectErrorMatches(throwable -> throwable instanceof RuntimeException
+                && throwable.getMessage().equals(errorMessage))
+                .verify();
+
+        verify(storageService, times(1)).uploadFile(filePart);
+        verify(fileRepository, times(1)).save(any(File.class));
+        verify(storageService, times(1)).deleteFile(uploadedS3Url);
+        verify(eventRepository, never()).save(any(Event.class));
+    }
+
+    @Test
+    @DisplayName("""
+            Успешное изменение файла ADMIN.\
+            1. Название файла в БД меняется.\
+            2. Путь до файла и статус не меняются.""")
+    void updateFileAdminSuccessTest() {
         String location = "http://minio/hacker-url/test.txt";
         String newFilename = "filename";
         FileDto fileDto = new FileDto();
@@ -157,12 +198,14 @@ public class FileServiceImplTest {
         userProxy.setId(5);
         existingFile.setUser(userProxy);
 
-        UserPrincipal principal = new UserPrincipal(5, "username", UserRole.USER);
+        UserPrincipal principal = new UserPrincipal(5, "admin", UserRole.ADMIN);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
+        when(fileSecurityChecker.checkWriteAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.just(existingFile));
         when(fileRepository.findById(fileDto.getId())).thenReturn(Optional.of(existingFile));
         when(fileRepository.save(any(File.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(eventService.create(any(EventDto.class))).thenReturn(Mono.just(new EventDto()));
+        when(eventRepository.save(any(Event.class))).thenReturn(new Event());
 
         Mono<FileDto> result = fileService.update(fileDto);
 
@@ -174,13 +217,93 @@ public class FileServiceImplTest {
                 .verifyComplete();
         verify(fileRepository, times(1)).findById(fileDto.getId());
         verify(fileRepository, times(1)).save(any(File.class));
-        verify(eventService, times(1)).create(
+        verify(eventRepository, times(1)).save(
                 argThat(eventDto ->
                         eventDto.getStatus().equals(EventStatus.UPDATED) &&
-                        eventDto.getFileId().equals(1) &&
-                        eventDto.getUserId().equals(5)
+                        eventDto.getFile().getId().equals(1) &&
+                        eventDto.getUser().getId().equals(5)
                 )
         );
+    }
+
+    @Test
+    @DisplayName("""
+            Успешное изменение файла MODERATOR.\
+            1. Название файла в БД меняется.\
+            2. Путь до файла и статус не меняются.""")
+    void updateFileModeratorSuccessTest() {
+        String location = "http://minio/hacker-url/test.txt";
+        String newFilename = "filename";
+        FileDto fileDto = new FileDto();
+        fileDto.setId(1);
+        fileDto.setName(newFilename);
+        fileDto.setLocation(location);
+        fileDto.setStatus(FileStatus.ARCHIVED);
+
+        String expectedS3Url = "http://minio/bucket/test.txt";
+        File existingFile = new File();
+        existingFile.setId(1);
+        existingFile.setName("test.txt");
+        existingFile.setLocation(expectedS3Url);
+        existingFile.setStatus(FileStatus.ACTIVE);
+
+        User userProxy = new User();
+        userProxy.setId(5);
+        existingFile.setUser(userProxy);
+
+        UserPrincipal principal = new UserPrincipal(5, "moderator", UserRole.MODERATOR);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(fileSecurityChecker.checkWriteAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.just(existingFile));
+        when(fileRepository.findById(fileDto.getId())).thenReturn(Optional.of(existingFile));
+        when(fileRepository.save(any(File.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(eventRepository.save(any(Event.class))).thenReturn(new Event());
+
+        Mono<FileDto> result = fileService.update(fileDto);
+
+        StepVerifier.create(result)
+                .expectNextMatches(dto -> dto.getName().equals(newFilename)             // Имя изменилось
+                                          && dto.getLocation().equals(expectedS3Url)    // Локация СТАРАЯ
+                                          && dto.getStatus().equals(FileStatus.ACTIVE)  // Статус СТАРЫЙ
+                )
+                .verifyComplete();
+        verify(fileRepository, times(1)).findById(fileDto.getId());
+        verify(fileRepository, times(1)).save(any(File.class));
+        verify(eventRepository, times(1)).save(
+                argThat(eventDto ->
+                        eventDto.getStatus().equals(EventStatus.UPDATED) &&
+                        eventDto.getFile().getId().equals(1) &&
+                        eventDto.getUser().getId().equals(5)
+                )
+        );
+    }
+
+    @Test
+    @DisplayName("Ошибка изменения файла: обычный USER получает AccessDeniedException")
+    void updateFileAccessDeniedForUserTest() {
+        FileDto fileDto = new FileDto();
+        fileDto.setId(1);
+        fileDto.setName("file_name");
+
+        File existingFile = new File();
+        existingFile.setId(1);
+
+        UserPrincipal principal = new UserPrincipal(5, "user", UserRole.USER);
+        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
+
+        when(fileRepository.findById(fileDto.getId())).thenReturn(Optional.of(existingFile));
+        when(fileSecurityChecker.checkWriteAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.error(new AccessDeniedException("Access Denied")));
+
+        Mono<FileDto> result = fileService.update(fileDto);
+
+        StepVerifier.create(result)
+                .expectError(AccessDeniedException.class)
+                .verify();
+        // Проверяем, что до сохранения файла в БД и генерации события дело не дошло.
+        verify(fileRepository, never()).save(any(File.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
@@ -201,7 +324,7 @@ public class FileServiceImplTest {
 
         verify(fileRepository, never()).findById(fileDto.getId());
         verify(fileRepository, never()).save(any(File.class));
-        verify(eventService, never()).create(any(EventDto.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
@@ -223,17 +346,17 @@ public class FileServiceImplTest {
 
         verify(fileRepository, never()).findById(fileDto.getId());
         verify(fileRepository, never()).save(any(File.class));
-        verify(eventService, never()).create(any(EventDto.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
-    @DisplayName("Ошибка изменения файла: Файл с таким ID не найден в БД")
+    @DisplayName("Ошибка изменения файла ADMIN: Файл с таким ID не найден в БД")
     void updateFileNotFoundInDbNegativeTest() {
         FileDto fileDto = new FileDto();
         fileDto.setId(2);
         fileDto.setName("newName");
 
-        UserPrincipal principal = new UserPrincipal(5, "username", UserRole.USER);
+        UserPrincipal principal = new UserPrincipal(5, "admin", UserRole.ADMIN);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         when(fileRepository.findById(fileDto.getId())).thenReturn(Optional.empty());
@@ -248,22 +371,19 @@ public class FileServiceImplTest {
 
         verify(fileRepository, times(1)).findById(fileDto.getId());
         verify(fileRepository, never()).save(any(File.class));
-        verify(eventService, never()).create(any(EventDto.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
-    @DisplayName("Ошибка изменения файла: USER пытается изменить чужой файл")
+    @DisplayName("Ошибка изменения файла: обычный USER получает отказ при любой попытке обновления")
     void updateForeignFileAsUserAccessDeniedTest() {
         FileDto fileDto = new FileDto();
         fileDto.setId(2);
         fileDto.setName("newName");
 
-        String expectedS3Url = "http://minio/bucket/test.txt";
         File existingFile = new File();
         existingFile.setId(1);
         existingFile.setName("test.txt");
-        existingFile.setLocation(expectedS3Url);
-        existingFile.setStatus(FileStatus.ACTIVE);
 
         User userProxy = new User();
         userProxy.setId(5);
@@ -273,89 +393,34 @@ public class FileServiceImplTest {
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         when(fileRepository.findById(fileDto.getId())).thenReturn(Optional.of(existingFile));
+        when(fileSecurityChecker.checkWriteAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.error(new AccessDeniedException("You do not have permission to work with this file.")));
 
         Mono<FileDto> result = fileService.update(fileDto);
 
         StepVerifier.create(result)
-                .expectErrorMatches(
-                        throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("You do not have permission to work with this file.")
-                ).verify();
+                .expectError(AccessDeniedException.class)
+                .verify();
 
         verify(fileRepository, times(1)).findById(fileDto.getId());
         verify(fileRepository, never()).save(any(File.class));
-        verify(eventService, never()).create(any(EventDto.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
-    @DisplayName("Успешное изменение файла ADMINом. " +
-                 "1. Название файла в БД меняется." +
-                 "2. Путь до файла и статус не меняются.")
-    void updateFileAsAdminSuccessTest() {
-        String location = "http://minio/hacker-url/test.txt";
-        String newFilename = "filename";
+    @DisplayName("Ошибка обновления файла: сбой СУБД при сохранении Event отменяет всю операцию")
+    void updateFileTransactionDbErrorTest() {
+        Integer fileId = 23;
         FileDto fileDto = new FileDto();
-        fileDto.setId(13);
-        fileDto.setName(newFilename);
-        fileDto.setLocation(location);
-        fileDto.setStatus(FileStatus.ARCHIVED);
+        fileDto.setId(fileId);
+        fileDto.setName("new_filename_test-file.txt");
 
-        String expectedS3Url = "http://minio/bucket/test.txt";
         File existingFile = new File();
-        existingFile.setId(13);
-        existingFile.setName("test.txt");
-        existingFile.setLocation(expectedS3Url);
-        existingFile.setStatus(FileStatus.ACTIVE);
+        existingFile.setId(fileId);
+        existingFile.setName("old_filename_test-file.txt");
+        existingFile.setLocation("http://minio/bucket/file.txt");
 
-        User userProxy = new User();
-        userProxy.setId(5);
-        existingFile.setUser(userProxy);
-
-        UserPrincipal principal = new UserPrincipal(777, "admin", UserRole.ADMIN);
-        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
-
-        when(fileRepository.findById(fileDto.getId())).thenReturn(Optional.of(existingFile));
-        when(fileRepository.save(any(File.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(eventService.create(any(EventDto.class))).thenReturn(Mono.just(new EventDto()));
-
-        Mono<FileDto> result = fileService.update(fileDto);
-
-        StepVerifier.create(result)
-                .expectNextMatches(dto -> dto.getName().equals(newFilename)             // Имя изменилось
-                                          && dto.getLocation().equals(expectedS3Url)    // Локация СТАРАЯ
-                                          && dto.getStatus().equals(FileStatus.ACTIVE)  // Статус СТАРЫЙ
-                )
-                .verifyComplete();
-        verify(fileRepository, times(1)).findById(fileDto.getId());
-        verify(fileRepository, times(1)).save(any(File.class));
-        verify(eventService, times(1)).create(
-                argThat(eventDto ->
-                        eventDto.getStatus().equals(EventStatus.UPDATED) &&
-                        eventDto.getFileId().equals(13) &&
-                        eventDto.getUserId().equals(777)
-                )
-        );
-    }
-
-    @Test
-    @DisplayName("Успешное изменение файла MODERATORом. " +
-                 "1. Название файла в БД меняется." +
-                 "2. Путь до файла и статус не меняются.")
-    void updateFileAsModeratorSuccessTest() {
-        String location = "http://minio/hacker-url/test.txt";
-        String newFilename = "filename";
-        FileDto fileDto = new FileDto();
-        fileDto.setId(22);
-        fileDto.setName(newFilename);
-        fileDto.setLocation(location);
-        fileDto.setStatus(FileStatus.ARCHIVED);
-
-        String expectedS3Url = "http://minio/bucket/test.txt";
-        File existingFile = new File();
-        existingFile.setId(22);
-        existingFile.setName("test.txt");
-        existingFile.setLocation(expectedS3Url);
-        existingFile.setStatus(FileStatus.ACTIVE);
+        String errorMessage = "JPA Transaction Constraint Violation!";
 
         User userProxy = new User();
         userProxy.setId(5);
@@ -364,40 +429,37 @@ public class FileServiceImplTest {
         UserPrincipal principal = new UserPrincipal(16, "moderator", UserRole.MODERATOR);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
-        when(fileRepository.findById(fileDto.getId())).thenReturn(Optional.of(existingFile));
+        when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
+        when(fileSecurityChecker.checkWriteAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.just(existingFile));
         when(fileRepository.save(any(File.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(eventService.create(any(EventDto.class))).thenReturn(Mono.just(new EventDto()));
+        // Падаем на сохранении события.
+        when(eventRepository.save(any(Event.class)))
+                .thenThrow(new RuntimeException(errorMessage));
 
         Mono<FileDto> result = fileService.update(fileDto);
 
         StepVerifier.create(result)
-                .expectNextMatches(dto -> dto.getName().equals(newFilename)             // Имя изменилось
-                                          && dto.getLocation().equals(expectedS3Url)    // Локация СТАРАЯ
-                                          && dto.getStatus().equals(FileStatus.ACTIVE)  // Статус СТАРЫЙ
-                )
-                .verifyComplete();
-        verify(fileRepository, times(1)).findById(fileDto.getId());
+                .expectErrorMatches(throwable -> throwable instanceof RuntimeException
+                && throwable.getMessage().equals(errorMessage))
+                .verify();
+
+        verify(fileRepository, times(1)).findById(fileId);
+        verify(fileSecurityChecker, times(1))
+                .checkWriteAccess(any(File.class), any(UserPrincipal.class));
         verify(fileRepository, times(1)).save(any(File.class));
-        verify(eventService, times(1)).create(
-                argThat(eventDto ->
-                        eventDto.getStatus().equals(EventStatus.UPDATED) &&
-                        eventDto.getFileId().equals(22) &&
-                        eventDto.getUserId().equals(16)
-                )
-        );
+        verify(eventRepository, times(1)).save(any(Event.class));
+        verify(storageService, never()).deleteFile(anyString());
     }
 
     @Test
-    @DisplayName("USER успешно удаляет свой файл")
+    @DisplayName("Ошибка удаления файла: обычный USER получает отказ при попытке удаления своего файла")
     void deleteFileAsUserSuccessTest() {
         Integer fileId = 33;
 
-        String expectedS3Url = "http://minio/bucket/test.txt";
         File existingFile = new File();
         existingFile.setId(fileId);
         existingFile.setName("test.txt");
-        existingFile.setLocation(expectedS3Url);
-        existingFile.setStatus(FileStatus.ACTIVE);
 
         User userProxy = new User();
         userProxy.setId(5);
@@ -407,28 +469,17 @@ public class FileServiceImplTest {
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
-        when(fileRepository.save(any(File.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(eventService.create(any(EventDto.class))).thenReturn(Mono.just(new EventDto()));
+        when(fileSecurityChecker.checkWriteAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.error(new AccessDeniedException("Users are not allowed to delete files.")));
 
         Mono<Void> result = fileService.delete(fileId);
 
-        StepVerifier.create(result).verifyComplete();
+        StepVerifier.create(result)
+                .expectError(AccessDeniedException.class)
+                .verify();
 
-        verify(fileRepository, times(1)).findById(fileId);
-        verify(fileRepository, times(1)).save(
-                argThat(fileDto ->
-                        fileDto.getId().equals(fileId) &&
-                        fileDto.getStatus().equals(FileStatus.ARCHIVED) &&
-                        fileDto.getUser().getId().equals(principal.getId())
-                )
-        );
-        verify(eventService, times(1)).create(
-                argThat(eventDto ->
-                        eventDto.getStatus().equals(EventStatus.DELETED) &&
-                        eventDto.getFileId().equals(fileId) &&
-                        eventDto.getUserId().equals(principal.getId())
-                )
-        );
+        verify(fileRepository, never()).save(any(File.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
@@ -450,9 +501,11 @@ public class FileServiceImplTest {
         UserPrincipal principal = new UserPrincipal(777, "admin", UserRole.ADMIN);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
+        when(fileSecurityChecker.checkWriteAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.just(existingFile));
         when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
         when(fileRepository.save(any(File.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(eventService.create(any(EventDto.class))).thenReturn(Mono.just(new EventDto()));
+        when(eventRepository.save(any(Event.class))).thenReturn(new Event());
 
         Mono<Void> result = fileService.delete(fileId);
 
@@ -466,11 +519,11 @@ public class FileServiceImplTest {
                         fileDto.getUser().getId().equals(userProxy.getId())
                 )
         );
-        verify(eventService, times(1)).create(
+        verify(eventRepository, times(1)).save(
                 argThat(eventDto ->
                         eventDto.getStatus().equals(EventStatus.DELETED) &&
-                        eventDto.getFileId().equals(fileId) &&
-                        eventDto.getUserId().equals(principal.getId())
+                        eventDto.getFile().getId().equals(fileId) &&
+                        eventDto.getUser().getId().equals(principal.getId())
                 )
         );
     }
@@ -494,9 +547,11 @@ public class FileServiceImplTest {
         UserPrincipal principal = new UserPrincipal(16, "moderator", UserRole.MODERATOR);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
+        when(fileSecurityChecker.checkWriteAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.just(existingFile));
         when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
         when(fileRepository.save(any(File.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(eventService.create(any(EventDto.class))).thenReturn(Mono.just(new EventDto()));
+        when(eventRepository.save(any(Event.class))).thenReturn(new Event());
 
         Mono<Void> result = fileService.delete(fileId);
 
@@ -510,19 +565,19 @@ public class FileServiceImplTest {
                         fileDto.getUser().getId().equals(userProxy.getId())
                 )
         );
-        verify(eventService, times(1)).create(
+        verify(eventRepository, times(1)).save(
                 argThat(eventDto ->
                         eventDto.getStatus().equals(EventStatus.DELETED) &&
-                        eventDto.getFileId().equals(fileId) &&
-                        eventDto.getUserId().equals(principal.getId())
+                        eventDto.getFile().getId().equals(fileId) &&
+                        eventDto.getUser().getId().equals(principal.getId())
                 )
         );
     }
 
     @Test
-    @DisplayName("Ошибка при удалении файла: USER не указал id файла")
+    @DisplayName("Ошибка при удалении файла: ADMIN не указал id файла")
     void deleteFileIdNotFoundNegativeTest() {
-        UserPrincipal principal = new UserPrincipal(1, "user", UserRole.USER);
+        UserPrincipal principal = new UserPrincipal(1, "admin", UserRole.ADMIN);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         Mono<Void> result = fileService.delete(null);
@@ -536,14 +591,14 @@ public class FileServiceImplTest {
 
         verify(fileRepository, never()).findById(any(Integer.class));
         verify(fileRepository, never()).save(any(File.class));
-        verify(eventService, never()).create(any(EventDto.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
     @DisplayName("Ошибка при удалении файла: по предоставленному id файл не найден в БД")
     void deleteFileNotFoundInDbNegativeTest() {
         Integer fileId = 33;
-        UserPrincipal principal = new UserPrincipal(1, "user", UserRole.USER);
+        UserPrincipal principal = new UserPrincipal(1, "admin", UserRole.ADMIN);
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         when(fileRepository.findById(fileId)).thenReturn(Optional.empty());
@@ -558,45 +613,11 @@ public class FileServiceImplTest {
 
         verify(fileRepository, times(1)).findById(fileId);
         verify(fileRepository, never()).save(any(File.class));
-        verify(eventService, never()).create(any(EventDto.class));
+        verify(eventRepository, never()).save(any(Event.class));
     }
 
     @Test
-    @DisplayName("Ошибка при удалении файла: USER пытается удалить не свой файл")
-    void deleteForeignFileAsUserAccessDeniedTest() {
-        Integer fileId = 33;
-
-        String expectedS3Url = "http://minio/bucket/test.txt";
-        File existingFile = new File();
-        existingFile.setId(fileId);
-        existingFile.setName("test.txt");
-        existingFile.setLocation(expectedS3Url);
-        existingFile.setStatus(FileStatus.ACTIVE);
-
-        User userProxy = new User();
-        userProxy.setId(5);
-        existingFile.setUser(userProxy);
-
-        UserPrincipal principal = new UserPrincipal(1, "user", UserRole.USER);
-        mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
-
-        when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
-
-        Mono<Void> result = fileService.delete(fileId);
-
-        StepVerifier.create(result)
-                .expectErrorMatches(
-                        throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("You do not have permission to work with this file.")
-                ).verify();
-
-        verify(fileRepository, times(1)).findById(fileId);
-        verify(fileRepository, never()).save(any(File.class));
-        verify(eventService, never()).create(any(EventDto.class));
-    }
-
-    @Test
-    @DisplayName("USER успешно ищет файл по ID")
+    @DisplayName("USER успешно ищет свой файл по ID")
     void findByIdFileAsUserSuccessTest() {
         Integer fileId = 33;
 
@@ -616,6 +637,8 @@ public class FileServiceImplTest {
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
+        when(fileSecurityChecker.checkReadAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.just(existingFile));
 
         Mono<FileDto> result = fileService.findById(fileId);
 
@@ -650,6 +673,8 @@ public class FileServiceImplTest {
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
+        when(fileSecurityChecker.checkReadAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.just(existingFile));
 
         Mono<FileDto> result = fileService.findById(fileId);
 
@@ -684,6 +709,8 @@ public class FileServiceImplTest {
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
+        when(fileSecurityChecker.checkReadAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.just(existingFile));
 
         Mono<FileDto> result = fileService.findById(fileId);
 
@@ -698,7 +725,7 @@ public class FileServiceImplTest {
     }
 
     @Test
-    @DisplayName("Не успешный поиск файла по ID: USER не указал ID файла")
+    @DisplayName("Не успешный поиск своего файла по ID: USER не указал ID файла")
     void findByIdFileIdNotFoundAsUserNegativeTest() {
 
         UserPrincipal principal = new UserPrincipal(1, "user", UserRole.USER);
@@ -716,7 +743,7 @@ public class FileServiceImplTest {
     }
 
     @Test
-    @DisplayName("Не успешный поиск файла по ID: файл с таким ID отсутствует в БД")
+    @DisplayName("Не успешный поиск своего файла по ID USER: файл с таким ID отсутствует в БД")
     void findByIdFileNotFoundInDbAsUserNegativeTest() {
         Integer fileId = 33;
 
@@ -757,14 +784,14 @@ public class FileServiceImplTest {
         mockedSecurityUtils.when(SecurityUtils::getCurrentUser).thenReturn(Mono.just(principal));
 
         when(fileRepository.findById(fileId)).thenReturn(Optional.of(existingFile));
+        when(fileSecurityChecker.checkReadAccess(any(File.class), any(UserPrincipal.class)))
+                .thenReturn(Mono.error(new AccessDeniedException("You do not have permission to view this file.")));
 
         Mono<FileDto> result = fileService.findById(fileId);
 
         StepVerifier.create(result)
-                .expectErrorMatches(
-                        throwable -> throwable instanceof AccessDeniedException
-                                     && throwable.getMessage().equals("You do not have permission to work with this file.")
-                ).verify();
+                .expectError(AccessDeniedException.class)
+                .verify();
 
         verify(fileRepository, times(1)).findById(fileId);
     }

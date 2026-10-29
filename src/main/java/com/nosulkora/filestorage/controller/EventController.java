@@ -4,10 +4,8 @@ import com.nosulkora.filestorage.model.dto.EventDto;
 import com.nosulkora.filestorage.service.EventService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -20,6 +18,27 @@ public class EventController {
 
     public EventController(EventService eventService) {
         this.eventService = eventService;
+    }
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Create event manually (ADMIN/MODERATOR only)")
+    public Mono<EventDto> create(@RequestBody EventDto eventDto) {
+        return eventService.create(eventDto);
+    }
+
+    @PutMapping("/{id}")
+    @Operation(summary = "Update event status (ADMIN/MODERATOR only)")
+    public Mono<EventDto> update(@PathVariable Integer id, @RequestBody EventDto eventDto) {
+        eventDto.setId(id);
+        return eventService.update(eventDto);
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "Delete event by ID (ADMIN/MODERATOR only)")
+    public Mono<Void> delete(@PathVariable Integer id) {
+        return eventService.delete(id);
     }
 
     @GetMapping("/{id}")

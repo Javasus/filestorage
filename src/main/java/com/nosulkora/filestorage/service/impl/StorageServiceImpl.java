@@ -15,7 +15,9 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.util.UUID;
 
 @Service
@@ -40,17 +42,18 @@ public class StorageServiceImpl implements StorageService {
         // Генерируем уникальное имя файла в S3, что бы избежать перезаписи при одинаковых именах.
         String uniqueFileName = UUID.randomUUID() + "_" + filePart.filename();
 
-        // Превращаем реактивный стрим DataBuffer в один InputStream
-        return DataBufferUtils.join(filePart.content())
-                .flatMap(dataBuffer -> {
-                    try {
-                        // 1. false - не освобождает буфер автоматически. Контролируем освобождение памяти вручную.
-                        InputStream inputStream = dataBuffer.asInputStream(false);
-                        // Размер файла в байтах (в буфере)
-                        long contentLength = dataBuffer.readableByteCount();
+        // 1. Создаем временный файл на диске ОС
+        return Mono.fromCallable(() -> Files.createTempFile("minio_upload_", ".tmp"))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(tempFilePart -> {
+                    // 2. Потоково (streaming) пишем чанки из сети на диск, RAM не переполняется
+                    return DataBufferUtils.write(filePart.content(), tempFilePart)
+                            .then(Mono.fromCallable(() -> {
+                                long contentLength = Files.size(tempFilePart);
+                                LOGGER.debug("File streamed to temporary disk storage. Size: {} bytes", contentLength);
 
-                        // Выполняем блокирующую операцию на boundedElastic воркер-пуле.
-                        return Mono.fromCallable(() -> {
+                                // 3. Открываем стрим из временного файла и отправляем в MinIO
+                                try (InputStream inputStream = Files.newInputStream(tempFilePart)) {
                                     minioClient.putObject(
                                             PutObjectArgs.builder()
                                                     .bucket(bucketName)
@@ -59,27 +62,29 @@ public class StorageServiceImpl implements StorageService {
                                                     .contentType(filePart.headers().getContentType().toString())
                                                     .build()
                                     );
-
-                                    // Формируем результирующий URL расположения файла.
-                                    String fileLocation = endpoint + "/" + bucketName + "/" + uniqueFileName;
-                                    LOGGER.info("File uploaded to MinIO successfully: {}", fileLocation);
-                                    return fileLocation;
-                                })
-                                .subscribeOn(Schedulers.boundedElastic())
-                                // 2. Гарантированно освобождаем буфер после завершения операции
-                                // (успех или ошибка внутри Callable)
-                                .doFinally(signalType -> DataBufferUtils.release(dataBuffer));
-
-                    } catch (Exception e) {
-                        // Если упало до создания Mono.fromCallable, тоже очищаем память
-                        DataBufferUtils.release(dataBuffer);
-                        LOGGER.error("Failed to convert file part content: {}", e.getMessage());
-                        return Mono.error(new ValidationException("Failed to process file upload"));
-                    }
+                                }
+                                // Формируем результирующий URL расположения файла.
+                                String fileLocation = endpoint + "/" + bucketName + "/" + uniqueFileName;
+                                LOGGER.info("File uploaded to MinIO successfully: {}", fileLocation);
+                                return fileLocation;
+                            }))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .doFinally(signalType -> {
+                                try {
+                                    boolean delete = Files.deleteIfExists(tempFilePart);
+                                    if (delete) {
+                                        LOGGER.debug("Temporary upload file deleted: {}", tempFilePart);
+                                    }
+                                } catch (IOException e) {
+                                    LOGGER.error("Failed to delete temporary file: {}", tempFilePart, e);
+                                }
+                            });
                 })
-                // 3. Страховка на случай, если цепочка отменилась до flatMap или во время сборки
-                .doOnDiscard(DataBuffer.class, DataBufferUtils::release);
-    }
+                .onErrorResume(e -> {
+                    LOGGER.error("Failed to process file upload: {}", e.getMessage(), e);
+                    return Mono.error(new ValidationException("Failed to process file upload"));
+                });
+}
 
 
     @Override

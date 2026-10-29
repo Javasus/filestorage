@@ -90,8 +90,15 @@ public class EventServiceImpl implements EventService {
     @Override
     public Mono<EventDto> findById(Integer id) {
         return SecurityUtils.getCurrentUser()
-                .flatMap(principal -> checkEventManagementAccess(principal)
-                        .then(getEventIfExist(id))
+                .flatMap(principal -> getEventIfExist(id)
+                        .flatMap(event -> {
+                            if (principal.getRole().equals(UserRole.USER) && !event.getUser().getId().equals(principal.getId())) {
+                                LOGGER.warn("Access denied: User {} tried to read foreign event ID {}",
+                                        principal.getName(), id);
+                                return Mono.error(new AccessDeniedException("You do not have permission to view this event"));
+                            }
+                            return Mono.just(event);
+                        })
                         .map(EventMapper::toDto)
                         .doOnNext(dto -> LOGGER.info("Event retrieved: ID {}", dto.getId())));
     }
@@ -99,12 +106,17 @@ public class EventServiceImpl implements EventService {
     @Override
     public Flux<EventDto> findAll() {
         return SecurityUtils.getCurrentUser()
-                .flatMapMany(principal -> checkEventManagementAccess(principal)
-                        .thenMany(Flux.defer(() -> {
-                            LOGGER.info("Fetching all events from database");
-                            return ReactiveWrapper.flux(eventRepository::findAll)
-                                    .map(EventMapper::toDto);
-                        })));
+                .flatMapMany(principal -> {
+                    if (principal.getRole().equals(UserRole.USER)) {
+                        LOGGER.info("Fetching events for user: {}", principal.getName());
+                        return ReactiveWrapper.<Event>flux(() -> eventRepository.findByUserId(principal.getId()))
+                                .map(EventMapper::toDto);
+                    }
+
+                    LOGGER.info("Fetching all events from database for privileged user: {}", principal.getName());
+                    return ReactiveWrapper.<Event>flux(eventRepository::findAll)
+                            .map(EventMapper::toDto);
+                });
     }
 
     // --- Вспомогательные методы ---

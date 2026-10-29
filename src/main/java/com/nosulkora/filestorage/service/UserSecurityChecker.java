@@ -17,6 +17,9 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 
+/**
+ *  Проверка прав участников для доступа к пользователям.
+ */
 @Component
 public class UserSecurityChecker {
 
@@ -136,18 +139,5 @@ public class UserSecurityChecker {
     public Mono<User> getTargetUserIfExist(Integer userId) {
         return ReactiveWrapper.monoOptional(() -> userRepository.findById(userId))
                 .switchIfEmpty(Mono.error(new NotFoundException("User not found with ID: " + userId)));
-    }
-
-    // ------------------------- Вспомогательные методы-----------------------
-
-    private Mono<User> validateUserRole(UserDto userDto, UserPrincipal currentUser) {
-        if (!currentUser.getRole().equals(UserRole.ADMIN)) {
-            LOGGER.warn(
-                    "Access denied: User {} attempted to change role to {}",
-                    currentUser.getName(),
-                    userDto.getRole());
-            return Mono.error(new AccessDeniedException("Only ADMIN can change user roles."));
-        }
-        return Mono.empty();
     }
 }

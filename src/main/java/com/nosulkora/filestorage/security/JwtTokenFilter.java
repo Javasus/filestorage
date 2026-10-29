@@ -1,6 +1,5 @@
 package com.nosulkora.filestorage.security;
 
-import com.nosulkora.filestorage.exception.NotFoundException;
 import com.nosulkora.filestorage.model.enums.UserRole;
 import com.nosulkora.filestorage.model.enums.UserStatus;
 import com.nosulkora.filestorage.service.UserService;

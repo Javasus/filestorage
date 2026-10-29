@@ -1,7 +1,6 @@
 package com.nosulkora.filestorage.service;
 
 import com.nosulkora.filestorage.exception.ValidationException;
-import com.nosulkora.filestorage.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -10,12 +9,6 @@ import org.springframework.stereotype.Component;
 public class UserValidator {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(UserValidator.class);
-
-    private final UserRepository userRepository;
-
-    public UserValidator(UserRepository userRepository) {
-        this.userRepository = userRepository;
-    }
 
     public void validateUsername(String username) {
         if (username == null || username.trim().isEmpty()) {
